@@ -27,7 +27,15 @@ spring:
       enabled: ${OPENAI_ENABLED:false}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:sk-placeholder}
+      base-url: ${ANTHROPIC_BASE_URL:https://api.anthropic.com}
       enabled: ${ANTHROPIC_ENABLED:false}
+
+# Admin APIs (/api/v1/providers/**, /api/v1/channels/**) require a JWT access token with
+# role=ADMIN signed with the same secret as ai-panel-user and the gateway.
+# When JWT_SECRET is not set the admin APIs are disabled (fail closed).
+aipanel:
+  security:
+    jwt-secret: ${JWT_SECRET:}
 
 server:
   port: ${SERVER_PORT:8084}

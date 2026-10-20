@@ -7,9 +7,13 @@
           <el-icon><Refresh /></el-icon>
           Reload Pool
         </el-button>
-        <el-button type="primary" @click="showAddKeyDialog = true">
-          <el-icon><Plus /></el-icon>
+        <el-button @click="showAddKeyDialog = true">
+          <el-icon><Key /></el-icon>
           Add API Key
+        </el-button>
+        <el-button type="primary" @click="openAddProvider">
+          <el-icon><Plus /></el-icon>
+          Add Provider
         </el-button>
       </div>
     </div>
@@ -30,6 +34,7 @@
             <div>
               <h3>{{ provider.name }}</h3>
               <span class="provider-type">{{ provider.type }}</span>
+              <div v-if="provider.baseUrl" class="provider-url" :title="provider.baseUrl">{{ provider.baseUrl }}</div>
             </div>
           </div>
           <el-switch
@@ -72,9 +77,16 @@
             <el-icon><Key /></el-icon>
             Manage Keys
           </el-button>
+          <el-button size="small" @click="openModels(provider)">
+            <el-icon><Grid /></el-icon>
+            Models
+          </el-button>
           <el-button size="small" @click="editProvider(provider)">
             <el-icon><Edit /></el-icon>
             Edit
+          </el-button>
+          <el-button size="small" type="danger" plain @click="confirmDeleteProvider(provider)">
+            <el-icon><Delete /></el-icon>
           </el-button>
         </div>
       </div>
@@ -261,7 +273,7 @@
           <el-input v-model="providerForm.type" disabled />
         </el-form-item>
         <el-form-item label="Base URL">
-          <el-input v-model="providerForm.baseUrl" placeholder="Default API URL" />
+          <el-input v-model="providerForm.baseUrl" :placeholder="baseUrlPlaceholder(providerForm.type)" />
         </el-form-item>
         <el-row :gutter="20">
           <el-col :span="8">
@@ -310,6 +322,130 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- Add Provider Dialog -->
+    <el-dialog
+      v-model="showAddProviderDialog"
+      title="Add Provider"
+      width="560px"
+      @closed="resetNewProviderForm"
+    >
+      <el-form
+        ref="newProviderFormRef"
+        :model="newProviderForm"
+        :rules="newProviderRules"
+        label-position="top"
+      >
+        <el-form-item label="Type" prop="type">
+          <el-select v-model="newProviderForm.type" style="width: 100%" @change="onNewProviderTypeChange">
+            <el-option-group
+              v-for="group in providerTypeGroups"
+              :key="group.label"
+              :label="group.label"
+            >
+              <el-option
+                v-for="t in group.types"
+                :key="t.value"
+                :label="t.label"
+                :value="t.value"
+              />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Name" prop="name">
+          <el-input v-model="newProviderForm.name" placeholder="e.g., GPU cluster A (vLLM)" />
+        </el-form-item>
+        <el-form-item label="Base URL" prop="baseUrl">
+          <el-input v-model="newProviderForm.baseUrl" :placeholder="baseUrlPlaceholder(newProviderForm.type)" />
+          <div class="form-hint">
+            OpenAI-compatible root, e.g. <code>http://gpu-host:8000/v1</code> (vLLM) or
+            <code>http://host:11434/v1</code> (Ollama). <code>/v1</code> is added when the URL has no path.
+          </div>
+        </el-form-item>
+        <el-form-item :label="isKeyOptional(newProviderForm.type) ? 'API Key (optional)' : 'API Key'" prop="apiKey">
+          <el-input
+            v-model="newProviderForm.apiKey"
+            type="password"
+            show-password
+            :placeholder="isKeyOptional(newProviderForm.type) ? 'Only if the server was started with --api-key' : 'Provider API key'"
+          />
+        </el-form-item>
+        <el-form-item label="Models">
+          <el-select
+            v-model="newProviderForm.models"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            placeholder="Type a model id and press Enter, e.g. Qwen/Qwen3-32B"
+            style="width: 100%"
+          />
+          <div class="form-hint">Exact model names clients will send. You can also fetch them from the server later.</div>
+        </el-form-item>
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="Priority (lower first)">
+              <el-input-number v-model="newProviderForm.priority" :min="1" :max="1000" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="Timeout (s)">
+              <el-input-number v-model="newProviderForm.timeoutSeconds" :min="1" :max="600" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddProviderDialog = false">Cancel</el-button>
+        <el-button type="primary" :loading="creatingProvider" @click="handleCreateProvider">Create</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Models Dialog -->
+    <el-dialog
+      v-model="showModelsDialog"
+      :title="modelsProvider ? `Models · ${modelsProvider.name}` : 'Models'"
+      width="640px"
+    >
+      <div class="models-toolbar">
+        <el-input
+          v-model="newModelId"
+          placeholder="Model id, e.g. Qwen/Qwen3-32B, glm-4.5, deepseek-r1:32b"
+          @keyup.enter="handleAddModel(newModelId)"
+        />
+        <el-button type="primary" :disabled="!newModelId.trim()" @click="handleAddModel(newModelId)">Add</el-button>
+        <el-button :loading="discovering" @click="handleDiscoverModels">Fetch from server</el-button>
+      </div>
+      <div v-if="discoveredModels.length" class="discovered">
+        <span class="discovered-label">Served by upstream:</span>
+        <el-tag
+          v-for="m in discoveredModels"
+          :key="m"
+          class="discovered-tag"
+          :type="registeredModelIds.has(m) ? 'success' : 'info'"
+          :effect="registeredModelIds.has(m) ? 'dark' : 'plain'"
+          @click="!registeredModelIds.has(m) && handleAddModel(m)"
+        >
+          {{ registeredModelIds.has(m) ? '✓ ' : '+ ' }}{{ m }}
+        </el-tag>
+      </div>
+      <el-table :data="providerModels" v-loading="modelsLoading" size="small" style="width: 100%">
+        <el-table-column prop="modelId" label="Model id" min-width="240" />
+        <el-table-column label="Enabled" width="90" align="center">
+          <template #default="{ row }">
+            <el-switch v-model="row.enabled" size="small" @change="toggleModel(row)" />
+          </template>
+        </el-table-column>
+        <el-table-column label="" width="70" align="center">
+          <template #default="{ row }">
+            <el-button size="small" type="danger" link @click="handleDeleteModel(row)">
+              <el-icon><Delete /></el-icon>
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -318,7 +454,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useProviderStore } from '@/stores/modules/provider'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { Provider, ProviderApiKey } from '@/types/provider'
+import type { Provider, ProviderApiKey, ProviderModel } from '@/types/provider'
+import { providerApi } from '@/api/provider'
 
 const providerStore = useProviderStore()
 
@@ -362,6 +499,265 @@ const keyRules: FormRules = {
 
 const providerRules: FormRules = {
   name: [{ required: true, message: 'Please enter provider name', trigger: 'blur' }],
+}
+
+// ---------- Provider types ----------
+
+const KEY_OPTIONAL_TYPES = ['vllm', 'ollama', 'openai_compatible', 'lmstudio', 'sglang', 'localai', 'llamacpp', 'xinference']
+
+const providerTypeGroups = [
+  {
+    label: 'Self-hosted (OpenAI-compatible)',
+    types: [
+      { value: 'vllm', label: 'vLLM' },
+      { value: 'ollama', label: 'Ollama' },
+      { value: 'sglang', label: 'SGLang' },
+      { value: 'lmstudio', label: 'LM Studio' },
+      { value: 'openai_compatible', label: 'Other OpenAI-compatible server' },
+    ],
+  },
+  {
+    label: 'Hosted',
+    types: [
+      { value: 'openai', label: 'OpenAI' },
+      { value: 'anthropic', label: 'Anthropic' },
+      { value: 'deepseek', label: 'DeepSeek' },
+      { value: 'moonshot', label: 'Moonshot (Kimi)' },
+      { value: 'zhipu', label: 'Zhipu (GLM)' },
+      { value: 'qwen', label: 'Qwen (DashScope)' },
+      { value: 'siliconflow', label: 'SiliconFlow' },
+      { value: 'openrouter', label: 'OpenRouter' },
+      { value: 'google', label: 'Google Gemini' },
+      { value: 'doubao', label: 'Doubao (Volcengine)' },
+    ],
+  },
+]
+
+const BASE_URL_EXAMPLES: Record<string, string> = {
+  vllm: 'http://gpu-host:8000/v1',
+  ollama: 'http://host:11434/v1',
+  sglang: 'http://gpu-host:30000/v1',
+  lmstudio: 'http://host:1234/v1',
+  openai_compatible: 'http://host:port/v1',
+  openai: 'https://api.openai.com/v1 (default)',
+  anthropic: 'https://api.anthropic.com (default)',
+  deepseek: 'https://api.deepseek.com/v1 (default)',
+  moonshot: 'https://api.moonshot.cn/v1 (default)',
+  zhipu: 'https://open.bigmodel.cn/api/paas/v4 (default)',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1 (default)',
+  siliconflow: 'https://api.siliconflow.cn/v1 (default)',
+  openrouter: 'https://openrouter.ai/api/v1 (default)',
+  google: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+}
+
+const HOSTED_WITH_DEFAULT_URL = ['openai', 'anthropic', 'deepseek', 'moonshot', 'zhipu', 'qwen', 'siliconflow', 'openrouter']
+
+function isKeyOptional(type: string): boolean {
+  return KEY_OPTIONAL_TYPES.includes(type)
+}
+
+function baseUrlPlaceholder(type: string): string {
+  return BASE_URL_EXAMPLES[type] || 'http://host:port/v1'
+}
+
+function typeLabel(type: string): string {
+  for (const g of providerTypeGroups) {
+    const t = g.types.find(x => x.value === type)
+    if (t) return t.label
+  }
+  return type
+}
+
+// ---------- Add provider ----------
+
+const showAddProviderDialog = ref(false)
+const creatingProvider = ref(false)
+const newProviderFormRef = ref<FormInstance>()
+const newProviderForm = reactive({
+  type: 'vllm',
+  name: 'vLLM',
+  baseUrl: '',
+  apiKey: '',
+  models: [] as string[],
+  priority: 100,
+  timeoutSeconds: 120,
+})
+
+const newProviderRules: FormRules = {
+  type: [{ required: true, message: 'Please select a type', trigger: 'change' }],
+  name: [{ required: true, message: 'Please enter a name', trigger: 'blur' }],
+  baseUrl: [{
+    validator: (_rule: unknown, value: string, callback: (e?: Error) => void) => {
+      if (!value && !HOSTED_WITH_DEFAULT_URL.includes(newProviderForm.type)) {
+        callback(new Error('Base URL is required for this provider type'))
+      } else if (value && !/^https?:\/\/[^\s]+$/.test(value.trim())) {
+        callback(new Error('Must be an http(s) URL'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur',
+  }],
+  apiKey: [{
+    validator: (_rule: unknown, value: string, callback: (e?: Error) => void) => {
+      if (!value && !isKeyOptional(newProviderForm.type)) {
+        callback(new Error('API key is required for this provider type'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur',
+  }],
+}
+
+function openAddProvider() {
+  showAddProviderDialog.value = true
+}
+
+function onNewProviderTypeChange(type: string) {
+  const known = providerTypeGroups.flatMap(g => g.types.map(t => t.label))
+  if (!newProviderForm.name || known.includes(newProviderForm.name)) {
+    newProviderForm.name = typeLabel(type)
+  }
+}
+
+function resetNewProviderForm() {
+  Object.assign(newProviderForm, {
+    type: 'vllm',
+    name: 'vLLM',
+    baseUrl: '',
+    apiKey: '',
+    models: [],
+    priority: 100,
+    timeoutSeconds: 120,
+  })
+  newProviderFormRef.value?.resetFields()
+}
+
+async function handleCreateProvider() {
+  const valid = await newProviderFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+  creatingProvider.value = true
+  try {
+    await providerStore.createProvider({
+      name: newProviderForm.name.trim(),
+      type: newProviderForm.type,
+      baseUrl: newProviderForm.baseUrl.trim() || undefined,
+      apiKey: newProviderForm.apiKey.trim() || undefined,
+      models: newProviderForm.models.map(m => m.trim()).filter(Boolean),
+      priority: newProviderForm.priority,
+      timeoutSeconds: newProviderForm.timeoutSeconds,
+      enabled: true,
+    })
+    await Promise.all([providerStore.fetchProviders(), providerStore.fetchApiKeys()])
+    showAddProviderDialog.value = false
+    ElMessage.success('Provider created')
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Failed to create provider')
+  } finally {
+    creatingProvider.value = false
+  }
+}
+
+async function confirmDeleteProvider(provider: Provider) {
+  try {
+    await ElMessageBox.confirm(
+      `Delete provider "${provider.name}" with its keys and models? This cannot be undone.`,
+      'Delete Provider',
+      { confirmButtonText: 'Delete', cancelButtonText: 'Cancel', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await providerStore.deleteProvider(provider.id)
+    if (selectedProvider.value?.id === provider.id) selectedProvider.value = null
+    await providerStore.fetchApiKeys()
+    ElMessage.success('Provider deleted')
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Failed to delete provider')
+  }
+}
+
+// ---------- Models ----------
+
+const showModelsDialog = ref(false)
+const modelsProvider = ref<Provider | null>(null)
+const providerModels = ref<ProviderModel[]>([])
+const modelsLoading = ref(false)
+const newModelId = ref('')
+const discovering = ref(false)
+const discoveredModels = ref<string[]>([])
+const registeredModelIds = computed(() => new Set(providerModels.value.map(m => m.modelId)))
+
+async function loadModels() {
+  if (!modelsProvider.value) return
+  modelsLoading.value = true
+  try {
+    providerModels.value = (await providerApi.listModels(modelsProvider.value.id)).data || []
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Failed to load models')
+  } finally {
+    modelsLoading.value = false
+  }
+}
+
+async function openModels(provider: Provider) {
+  modelsProvider.value = provider
+  providerModels.value = []
+  discoveredModels.value = []
+  newModelId.value = ''
+  showModelsDialog.value = true
+  await loadModels()
+}
+
+async function handleAddModel(modelId: string) {
+  const id = modelId.trim()
+  if (!id || !modelsProvider.value) return
+  try {
+    await providerApi.addModel(modelsProvider.value.id, { modelId: id, enabled: true })
+    newModelId.value = ''
+    await loadModels()
+    providerStore.fetchProviders()
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Failed to add model')
+  }
+}
+
+async function toggleModel(model: ProviderModel) {
+  if (!modelsProvider.value) return
+  try {
+    await providerApi.updateModel(modelsProvider.value.id, model.id, { modelId: model.modelId, enabled: model.enabled })
+    providerStore.fetchProviders()
+  } catch (error: any) {
+    model.enabled = !model.enabled
+    ElMessage.error(error.message || 'Failed to update model')
+  }
+}
+
+async function handleDeleteModel(model: ProviderModel) {
+  if (!modelsProvider.value) return
+  try {
+    await providerApi.deleteModel(modelsProvider.value.id, model.id)
+    await loadModels()
+    providerStore.fetchProviders()
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Failed to delete model')
+  }
+}
+
+async function handleDiscoverModels() {
+  if (!modelsProvider.value) return
+  discovering.value = true
+  try {
+    discoveredModels.value = (await providerApi.discoverModels(modelsProvider.value.id)).data || []
+    if (!discoveredModels.value.length) ElMessage.info('The server did not report any models')
+  } catch (error: any) {
+    ElMessage.error(error.message || 'Could not reach the server')
+  } finally {
+    discovering.value = false
+  }
 }
 
 const filteredKeys = computed(() => {
@@ -411,6 +807,11 @@ async function toggleProvider(provider: Provider) {
     await providerStore.updateProvider(provider.id, {
       name: provider.name,
       type: provider.type,
+      baseUrl: provider.baseUrl || undefined,
+      priority: provider.priority,
+      timeoutSeconds: provider.timeoutSeconds,
+      retryCount: provider.retryCount,
+      description: provider.description || undefined,
       enabled: provider.enabled,
     })
     ElMessage.success(`Provider ${provider.enabled ? 'enabled' : 'disabled'}`)
@@ -582,6 +983,51 @@ onMounted(() => {
     .header-actions {
       display: flex;
       gap: 12px;
+    }
+  }
+
+  .provider-url {
+    font-size: 12px;
+    color: #6b7280;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .form-hint {
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.5;
+    margin-top: 4px;
+
+    code {
+      background: #f3f4f6;
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+  }
+
+  .models-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .discovered {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 12px;
+
+    .discovered-label {
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .discovered-tag {
+      cursor: pointer;
     }
   }
 

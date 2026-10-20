@@ -3,38 +3,45 @@ package com.aipanel.channel.core.router;
 import com.aipanel.channel.api.dto.request.ChatCompletionRequest;
 import com.aipanel.channel.api.dto.response.ChatCompletionResponse;
 import com.aipanel.channel.api.dto.response.ModelListResponse;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import com.aipanel.channel.core.upstream.StreamResult;
+import com.aipanel.channel.core.upstream.StreamSink;
+import com.aipanel.channel.core.upstream.UpstreamProvider;
 
 import java.util.List;
 
 /**
- * Model router service interface
- * Routes requests to appropriate AI providers using Spring AI
+ * Routes chat completion requests to the configured upstream providers.
  */
 public interface ModelRouterService {
 
     /**
-     * Route chat completion request to appropriate provider
+     * Non-streaming chat completion.
      */
     ChatCompletionResponse chatCompletion(ChatCompletionRequest request);
 
     /**
-     * Stream chat completion response
+     * Streaming chat completion. OpenAI-format chunks are written to {@code sink}
+     * (the caller writes the final {@code [DONE]}).
      */
-    SseEmitter streamChatCompletion(ChatCompletionRequest request);
+    StreamResult streamChatCompletion(ChatCompletionRequest request, StreamSink sink);
 
     /**
-     * Get list of available models
+     * Models available through enabled providers.
      */
     ModelListResponse listModels();
 
     /**
-     * Get supported models for a specific provider
+     * Enabled model ids of all enabled providers of a type.
      */
-    List<String> getProviderModels(String provider);
+    List<String> getProviderModels(String providerType);
 
     /**
-     * Check if model is supported
+     * Whether at least one usable provider can serve this model.
      */
     boolean isModelSupported(String model);
+
+    /**
+     * Candidate providers for a model, in the order they will be tried.
+     */
+    List<UpstreamProvider> resolveProviders(String model);
 }

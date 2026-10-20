@@ -2,10 +2,11 @@ package com.aipanel.channel.web.controller;
 
 import com.aipanel.channel.api.dto.request.ProviderApiKeyRequest;
 import com.aipanel.channel.api.dto.request.ProviderConfigRequest;
+import com.aipanel.channel.api.dto.request.ProviderModelRequest;
 import com.aipanel.channel.api.dto.response.ProviderApiKeyResponse;
 import com.aipanel.channel.api.dto.response.ProviderConfigResponse;
+import com.aipanel.channel.api.dto.response.ProviderModelResponse;
 import com.aipanel.channel.core.pool.ApiKeyPool;
-import com.aipanel.channel.core.pool.DynamicProviderFactory;
 import com.aipanel.channel.core.service.ProviderConfigService;
 import com.aipanel.common.domain.R;
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,7 +28,6 @@ import java.util.Map;
 public class ProviderConfigController {
 
     private final ProviderConfigService providerConfigService;
-    private final DynamicProviderFactory dynamicProviderFactory;
     private final ApiKeyPool apiKeyPool;
 
     // ==================== Provider Config ====================
@@ -66,6 +66,40 @@ public class ProviderConfigController {
     }
 
     // ==================== API Keys ====================
+
+    // ==================== Models ====================
+
+    @GetMapping("/{id}/models")
+    @Operation(summary = "List models registered on a provider")
+    public R<List<ProviderModelResponse>> listModels(@PathVariable Long id) {
+        return R.ok(providerConfigService.listModels(id));
+    }
+
+    @PostMapping("/{id}/models")
+    @Operation(summary = "Register a model on a provider (any model id, e.g. Qwen/Qwen3-32B)")
+    public R<ProviderModelResponse> addModel(@PathVariable Long id, @Valid @RequestBody ProviderModelRequest request) {
+        return R.ok(providerConfigService.addModel(id, request));
+    }
+
+    @PutMapping("/{id}/models/{modelPk}")
+    @Operation(summary = "Update a registered model")
+    public R<ProviderModelResponse> updateModel(@PathVariable Long id, @PathVariable Long modelPk,
+                                                @Valid @RequestBody ProviderModelRequest request) {
+        return R.ok(providerConfigService.updateModel(id, modelPk, request));
+    }
+
+    @DeleteMapping("/{id}/models/{modelPk}")
+    @Operation(summary = "Remove a model from a provider")
+    public R<Void> deleteModel(@PathVariable Long id, @PathVariable Long modelPk) {
+        providerConfigService.deleteModel(id, modelPk);
+        return R.ok();
+    }
+
+    @GetMapping("/{id}/models/discover")
+    @Operation(summary = "List the models the upstream server reports (GET {baseUrl}/models); nothing is saved")
+    public R<List<String>> discoverModels(@PathVariable Long id) {
+        return R.ok(providerConfigService.discoverModels(id));
+    }
 
     @Operation(summary = "List API keys")
     @GetMapping("/keys")
@@ -113,7 +147,7 @@ public class ProviderConfigController {
     @Operation(summary = "Get providers status and statistics")
     @GetMapping("/status")
     public R<Map<String, Object>> getProvidersStatus() {
-        return R.ok(dynamicProviderFactory.getProvidersStatus());
+        return R.ok(apiKeyPool.getStatistics());
     }
 
     @Operation(summary = "Reload key pool from database")

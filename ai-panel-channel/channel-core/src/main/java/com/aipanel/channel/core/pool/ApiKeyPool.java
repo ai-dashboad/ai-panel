@@ -2,6 +2,8 @@ package com.aipanel.channel.core.pool;
 
 import com.aipanel.channel.data.mysql.mapper.ProviderApiKeyMapper;
 import com.aipanel.channel.data.mysql.mapper.ProviderConfigMapper;
+import com.aipanel.channel.data.mysql.mapper.ProviderModelMapper;
+import com.aipanel.channel.data.mysql.po.ProviderModelPO;
 import com.aipanel.channel.data.mysql.po.ProviderApiKeyPO;
 import com.aipanel.channel.data.mysql.po.ProviderConfigPO;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -29,21 +31,33 @@ public class ApiKeyPool {
 
     private final ProviderConfigMapper providerConfigMapper;
     private final ProviderApiKeyMapper providerApiKeyMapper;
+    private final ProviderModelMapper providerModelMapper;
 
     /**
-     * Cache: providerType -> list of active keys
+     * Cache: providerId -> list of active keys. Several providers may share a type
+     * (e.g. two vLLM servers), so everything is keyed by provider id.
      */
-    private final Map<String, List<KeyEntry>> keyPool = new ConcurrentHashMap<>();
+    private volatile Map<Long, List<KeyEntry>> keyPool = new ConcurrentHashMap<>();
 
     /**
-     * Round-robin counter for each provider
+     * Provider configuration cache: providerId -> config (enabled providers only)
      */
-    private final Map<String, AtomicInteger> roundRobinCounters = new ConcurrentHashMap<>();
+    private volatile Map<Long, ProviderConfig> providerConfigs = new ConcurrentHashMap<>();
 
     /**
-     * Provider configuration cache
+     * Legacy view: providerType -> highest-priority enabled provider of that type
      */
-    private final Map<String, ProviderConfig> providerConfigs = new ConcurrentHashMap<>();
+    private volatile Map<String, ProviderConfig> primaryByType = new ConcurrentHashMap<>();
+
+    /**
+     * Enabled models: modelId -> provider ids (enabled providers only)
+     */
+    private volatile Map<String, List<Long>> modelIndex = new ConcurrentHashMap<>();
+
+    /**
+     * Enabled models per provider: providerId -> model ids
+     */
+    private volatile Map<Long, List<String>> modelsByProvider = new ConcurrentHashMap<>();
 
     @Data
     public static class KeyEntry {
@@ -82,15 +96,15 @@ public class ApiKeyPool {
      * Reload all provider configurations and keys from database
      */
     @Scheduled(fixedRate = 60000) // Reload every minute
-    public void reload() {
+    public synchronized void reload() {
         try {
-            // Load provider configurations
             List<ProviderConfigPO> providers = providerConfigMapper.selectList(
                 new LambdaQueryWrapper<ProviderConfigPO>()
                     .eq(ProviderConfigPO::getEnabled, true)
             );
 
-            Map<String, ProviderConfig> newConfigs = new HashMap<>();
+            Map<Long, ProviderConfig> newConfigs = new ConcurrentHashMap<>();
+            Map<String, ProviderConfig> newPrimary = new ConcurrentHashMap<>();
             for (ProviderConfigPO po : providers) {
                 ProviderConfig config = new ProviderConfig();
                 config.setId(po.getId());
@@ -100,13 +114,12 @@ public class ApiKeyPool {
                 config.setTimeoutSeconds(po.getTimeoutSeconds() != null ? po.getTimeoutSeconds() : 60);
                 config.setRetryCount(po.getRetryCount() != null ? po.getRetryCount() : 3);
                 config.setPriority(po.getPriority() != null ? po.getPriority() : 100);
-                newConfigs.put(po.getType(), config);
+                newConfigs.put(po.getId(), config);
+                newPrimary.merge(po.getType(), config,
+                    (a, b) -> a.getPriority() <= b.getPriority() ? a : b);
             }
-            providerConfigs.clear();
-            providerConfigs.putAll(newConfigs);
 
-            // Load API keys for each provider
-            Map<String, List<KeyEntry>> newPool = new HashMap<>();
+            Map<Long, List<KeyEntry>> newPool = new ConcurrentHashMap<>();
             for (ProviderConfigPO provider : providers) {
                 List<ProviderApiKeyPO> keys = providerApiKeyMapper.selectList(
                     new LambdaQueryWrapper<ProviderApiKeyPO>()
@@ -125,16 +138,32 @@ public class ApiKeyPool {
                     .collect(Collectors.toList());
 
                 if (!entries.isEmpty()) {
-                    newPool.put(provider.getType(), entries);
-                    roundRobinCounters.putIfAbsent(provider.getType(), new AtomicInteger(0));
-                    log.info("Loaded {} keys for provider: {}", entries.size(), provider.getType());
+                    newPool.put(provider.getId(), entries);
+                    log.info("Loaded {} keys for provider: {} ({})", entries.size(), provider.getName(), provider.getType());
                 }
             }
 
-            keyPool.clear();
-            keyPool.putAll(newPool);
+            Map<String, List<Long>> newModelIndex = new ConcurrentHashMap<>();
+            Map<Long, List<String>> newModelsByProvider = new ConcurrentHashMap<>();
+            if (!newConfigs.isEmpty()) {
+                List<ProviderModelPO> models = providerModelMapper.selectList(
+                    new LambdaQueryWrapper<ProviderModelPO>()
+                        .eq(ProviderModelPO::getEnabled, true)
+                        .in(ProviderModelPO::getProviderId, newConfigs.keySet())
+                );
+                for (ProviderModelPO model : models) {
+                    newModelIndex.computeIfAbsent(model.getModelId(), k -> new ArrayList<>()).add(model.getProviderId());
+                    newModelsByProvider.computeIfAbsent(model.getProviderId(), k -> new ArrayList<>()).add(model.getModelId());
+                }
+            }
 
-            log.info("API Key Pool reloaded: {} providers with keys", keyPool.size());
+            providerConfigs = newConfigs;
+            primaryByType = newPrimary;
+            keyPool = newPool;
+            modelIndex = newModelIndex;
+            modelsByProvider = newModelsByProvider;
+
+            log.info("API Key Pool reloaded: {} enabled providers, {} with keys", newConfigs.size(), newPool.size());
 
         } catch (Exception e) {
             log.error("Failed to reload API Key Pool", e);
@@ -161,11 +190,11 @@ public class ApiKeyPool {
     /**
      * Get the next available API key for a provider using weighted round-robin
      *
-     * @param providerType the provider type (e.g., "openai", "anthropic")
+     * @param providerId the provider_config id
      * @return the selected key entry, or null if no keys available
      */
-    public KeyEntry getNextKey(String providerType) {
-        List<KeyEntry> keys = keyPool.get(providerType);
+    public KeyEntry getNextKey(Long providerId) {
+        List<KeyEntry> keys = providerId == null ? null : keyPool.get(providerId);
         if (keys == null || keys.isEmpty()) {
             return null;
         }
@@ -176,12 +205,21 @@ public class ApiKeyPool {
             .collect(Collectors.toList());
 
         if (availableKeys.isEmpty()) {
-            log.warn("No available keys for provider: {}", providerType);
+            log.warn("No available keys for provider id: {}", providerId);
             return null;
         }
 
-        // Use weighted round-robin selection
-        return selectByWeightedRoundRobin(availableKeys);
+        synchronized (keys) {
+            return selectByWeightedRoundRobin(availableKeys);
+        }
+    }
+
+    /**
+     * Legacy lookup by provider type (uses the highest-priority provider of that type).
+     */
+    public KeyEntry getNextKey(String providerType) {
+        ProviderConfig config = primaryByType.get(providerType);
+        return config == null ? null : getNextKey(config.getId());
     }
 
     private boolean isKeyAvailable(KeyEntry key) {
@@ -231,28 +269,104 @@ public class ApiKeyPool {
     }
 
     /**
-     * Get provider configuration
+     * Get provider configuration by provider id (enabled providers only)
      */
-    public ProviderConfig getProviderConfig(String providerType) {
-        return providerConfigs.get(providerType);
+    public ProviderConfig getProviderConfig(Long providerId) {
+        return providerId == null ? null : providerConfigs.get(providerId);
     }
 
     /**
-     * Get all available provider types
+     * Legacy: highest-priority enabled provider of the given type
+     */
+    public ProviderConfig getProviderConfig(String providerType) {
+        return primaryByType.get(providerType);
+    }
+
+    /**
+     * All enabled providers, ordered by priority (lower first) then id
+     */
+    public List<ProviderConfig> getEnabledProviders() {
+        return providerConfigs.values().stream()
+            .sorted(Comparator.comparingInt(ProviderConfig::getPriority).thenComparing(ProviderConfig::getId))
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Enabled providers of the given type, ordered by priority
+     */
+    public List<ProviderConfig> getEnabledProvidersByType(String providerType) {
+        return getEnabledProviders().stream()
+            .filter(p -> providerType.equalsIgnoreCase(p.getType()))
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Enabled providers that explicitly list the given model (exact match first, then
+     * case-insensitive), ordered by provider priority.
+     */
+    public List<ProviderConfig> getProvidersForModel(String modelId) {
+        if (modelId == null) {
+            return List.of();
+        }
+        List<Long> ids = modelIndex.get(modelId);
+        if (ids == null) {
+            ids = modelIndex.entrySet().stream()
+                .filter(e -> e.getKey().equalsIgnoreCase(modelId))
+                .flatMap(e -> e.getValue().stream())
+                .collect(Collectors.toList());
+        }
+        Set<Long> idSet = new HashSet<>(ids);
+        return getEnabledProviders().stream()
+            .filter(p -> idSet.contains(p.getId()))
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Enabled model ids of a provider
+     */
+    public List<String> getModelsForProvider(Long providerId) {
+        return modelsByProvider.getOrDefault(providerId, List.of());
+    }
+
+    /**
+     * Number of loaded keys for a provider
+     */
+    public int getKeyCount(Long providerId) {
+        List<KeyEntry> keys = providerId == null ? null : keyPool.get(providerId);
+        return keys == null ? 0 : keys.size();
+    }
+
+    /**
+     * Types of all enabled providers that have at least one key loaded
      */
     public Set<String> getAvailableProviders() {
-        return new HashSet<>(keyPool.keySet());
+        Set<String> types = new HashSet<>();
+        keyPool.keySet().forEach(id -> {
+            ProviderConfig c = providerConfigs.get(id);
+            if (c != null) {
+                types.add(c.getType());
+            }
+        });
+        return types;
     }
 
     /**
      * Check if a provider has available keys
      */
-    public boolean hasAvailableKeys(String providerType) {
-        List<KeyEntry> keys = keyPool.get(providerType);
+    public boolean hasAvailableKeys(Long providerId) {
+        List<KeyEntry> keys = providerId == null ? null : keyPool.get(providerId);
         if (keys == null || keys.isEmpty()) {
             return false;
         }
         return keys.stream().anyMatch(this::isKeyAvailable);
+    }
+
+    /**
+     * Legacy: whether the highest-priority provider of this type has available keys
+     */
+    public boolean hasAvailableKeys(String providerType) {
+        ProviderConfig config = primaryByType.get(providerType);
+        return config != null && hasAvailableKeys(config.getId());
     }
 
     /**
@@ -309,8 +423,13 @@ public class ApiKeyPool {
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
 
-        for (Map.Entry<String, List<KeyEntry>> entry : keyPool.entrySet()) {
-            String provider = entry.getKey();
+        for (Map.Entry<Long, List<KeyEntry>> entry : keyPool.entrySet()) {
+            ProviderConfig config = providerConfigs.get(entry.getKey());
+            if (config == null) {
+                continue;
+            }
+            String provider = stats.containsKey(config.getType())
+                ? config.getType() + ":" + config.getName() : config.getType();
             List<KeyEntry> keys = entry.getValue();
 
             Map<String, Object> providerStats = new HashMap<>();

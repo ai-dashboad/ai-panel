@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS provider_config (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted TINYINT(1) DEFAULT 0,
-    UNIQUE KEY uk_type (type, deleted)
+    KEY idx_type (type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Provider Configuration';
 
 -- API Key pool for each provider

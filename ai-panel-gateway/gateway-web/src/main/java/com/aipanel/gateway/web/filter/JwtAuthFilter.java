@@ -36,7 +36,7 @@ import java.util.Locale;
  *       the client on every request, so downstream services only ever see values set by the gateway.</li>
  *   <li>Rejects {@code /api/v1/.../internal/...} paths (service-to-service endpoints) with 404.</li>
  *   <li>For JWT paths, validates the access token and forwards {@code X-User-ID} / {@code X-User-Role}.</li>
- *   <li>For {@code /api/v1/admin/**}: missing/invalid token -> 401, token without {@code role=ADMIN} -> 403.</li>
+ *   <li>For admin paths ({@code /api/v1/admin/**}, {@code /api/v1/providers/**}, {@code /api/v1/channels/**}): missing/invalid token -> 401, token without {@code role=ADMIN} -> 403.</li>
  * </ol>
  */
 @Component
@@ -46,6 +46,10 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
     public static final String HEADER_USER_ROLE = "X-User-Role";
     static final String HEADER_PLAN_TYPE = "X-Plan-Type";
     static final String ADMIN_PATH_PREFIX = "/api/v1/admin";
+    /** Admin-only path prefixes: user-service admin APIs and channel-service provider/channel management. */
+    static final List<String> ADMIN_PATH_PREFIXES = List.of(
+        ADMIN_PATH_PREFIX, "/api/v1/providers", "/api/v1/channels"
+    );
     static final String ROLE_ADMIN = "ADMIN";
 
     /** Headers that only the gateway may set; any client-supplied value is removed. */
@@ -59,7 +63,9 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         "/api/v1/keys",
         "/api/v1/billing",
         "/api/v1/usage",
-        ADMIN_PATH_PREFIX
+        ADMIN_PATH_PREFIX,
+        "/api/v1/providers",
+        "/api/v1/channels"
     );
 
     private final SecretKey signingKey;
@@ -163,7 +169,7 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
     }
 
     static boolean isAdminPath(String path) {
-        return path.equals(ADMIN_PATH_PREFIX) || path.startsWith(ADMIN_PATH_PREFIX + "/");
+        return ADMIN_PATH_PREFIXES.stream().anyMatch(p -> path.equals(p) || path.startsWith(p + "/"));
     }
 
     static boolean isInternalPath(String path) {

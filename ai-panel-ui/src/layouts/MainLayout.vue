@@ -77,7 +77,7 @@ const isCollapsed = ref(false)
 const allMenuItems = [
   { path: '/dashboard', title: 'Dashboard', icon: 'Odometer' },
   { path: '/api-keys', title: 'API Keys', icon: 'Key' },
-  { path: '/providers', title: 'Providers', icon: 'Connection' },
+  { path: '/providers', title: 'Providers', icon: 'Connection', adminOnly: true },
   { path: '/models', title: 'Models', icon: 'Cpu' },
   { path: '/usage', title: 'Usage & Billing', icon: 'DataLine' },
   { path: '/subscription-requests', title: 'Subscription Requests', icon: 'Tickets' },
@@ -87,7 +87,7 @@ const allMenuItems = [
   { path: '/settings', title: 'Settings', icon: 'Setting' },
 ]
 
-// Delivery pages call /api/v1/admin/**, which the backend restricts to role=ADMIN.
+// Delivery pages call /api/v1/admin/** and Providers calls /api/v1/providers/**; the backend restricts both to role=ADMIN.
 const menuItems = computed(() => allMenuItems.filter(m => !m.adminOnly || userStore.isAdmin))
 
 onMounted(() => {

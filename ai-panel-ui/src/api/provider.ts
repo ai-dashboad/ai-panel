@@ -4,7 +4,9 @@ import type {
   ProviderApiKey,
   CreateProviderRequest,
   CreateProviderApiKeyRequest,
-  ProviderStatus
+  ProviderStatus,
+  ProviderModel,
+  ProviderModelRequest
 } from '@/types/provider'
 
 export const providerApi = {
@@ -18,6 +20,20 @@ export const providerApi = {
   updateProvider: (id: number, data: CreateProviderRequest) => put<Provider>(`/providers/${id}`, data),
 
   deleteProvider: (id: number) => del(`/providers/${id}`),
+
+  // Models served by a provider (any model id, e.g. Qwen/Qwen3-32B)
+  listModels: (providerId: number) => get<ProviderModel[]>(`/providers/${providerId}/models`),
+
+  addModel: (providerId: number, data: ProviderModelRequest) =>
+    post<ProviderModel>(`/providers/${providerId}/models`, data),
+
+  updateModel: (providerId: number, modelPk: number, data: ProviderModelRequest) =>
+    put<ProviderModel>(`/providers/${providerId}/models/${modelPk}`, data),
+
+  deleteModel: (providerId: number, modelPk: number) => del(`/providers/${providerId}/models/${modelPk}`),
+
+  // Ask the upstream server which models it serves (GET {baseUrl}/models); nothing is saved
+  discoverModels: (providerId: number) => get<string[]>(`/providers/${providerId}/models/discover`),
 
   // API Keys
   listApiKeys: (providerId?: number) => {

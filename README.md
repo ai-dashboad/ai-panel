@@ -29,7 +29,7 @@ AI Panel is a Java / Spring Cloud microservice platform with a Vue 3 admin conso
 | **ai-panel-user** | Registration, login and refresh with JWT; user profile (`/api/v1/auth/**`, `/api/v1/users/**`). It also has an optional **order auto-delivery** feature: admins configure external sales platforms and product SKUs, and a signed webhook (`/api/v1/webhook/{platform}`, HMAC-SHA256) creates orders and delivers an API key automatically. Admins can view, retry and cancel orders and see delivery logs. |
 | **ai-panel-key** | API key lifecycle: create, list, update, delete, regenerate, and view per-key usage. Keys are stored only as **SHA-256 hashes** with a display prefix. Validation results are cached in Redis, and an internal validation endpoint serves the gateway. |
 | **ai-panel-dispatch** | Core model router. `ModelRouterService` uses Resilience4j circuit breakers and per-model fallback chains (for example `gpt-4o → gpt-4-turbo → claude-3-5-sonnet → gpt-3.5-turbo`). Has OpenAI and Anthropic clients, sync and SSE-streaming chat completions, model groups, and stats (daily per-user usage, per-model stats, provider errors, model health). Checks quota against the billing service before each call. |
-| **ai-panel-channel** | OpenAI-compatible API (`POST /v1/chat/completions` with JSON or `text/event-stream`, `GET /v1/models`) built on **Spring AI**. Manages upstream providers and **provider key pools** (`ApiKeyPool`: weighted round-robin, failover, reset), with key validation, quick and batch setup, and hot reload. Also handles sales/distribution *channels* and generates keys in bulk per channel. Includes a token counter. |
+| **ai-panel-channel** | OpenAI-compatible API (`POST /v1/chat/completions` with JSON or SSE streaming, `GET /v1/models`). Routes **any model name** registered on a provider (`Qwen/Qwen3-32B`, `glm-4.5`, `deepseek-r1:32b`, …) to hosted providers or **self-hosted vLLM / Ollama / any OpenAI-compatible server** (custom base URL, optional key, several providers per type, priority failover). **Tool calling** is passed through end to end (`tools`, `tool_choice`, `parallel_tool_calls`, `tool_calls` / `tool` messages, streaming `tool_calls` deltas, real `finish_reason`), with no injected sampling defaults. The Anthropic adapter maps tools to `tool_use` / `tool_result`. Manages **provider key pools** (`ApiKeyPool`: weighted round-robin, failover, reset), sales/distribution *channels* with bulk key generation, and usage logging. See [docs/self-hosted-models.md](docs/self-hosted-models.md). |
 | **ai-panel-model** | Model catalog: CRUD for models (context window, max output, input/output price, features, fallback chain) and providers, plus provider sync. |
 | **ai-panel-billing** | Usage recording, usage summaries, usage records, user balance and credit top-ups. |
 | **ai-panel-analytics** | Dashboard metrics, plus usage broken down by time range, channel and API key. |
@@ -38,7 +38,7 @@ AI Panel is a Java / Spring Cloud microservice platform with a Vue 3 admin conso
 | **ai-panel-ui** | Vue 3 + Element Plus admin console: login and register, first-run **setup wizard**, dashboard, API keys, providers, model catalog, usage and billing, subscription requests, settings, and delivery (platforms / SKUs / orders). Playwright E2E tests are in `e2e/`. |
 | **workers/** *(experimental)* | A Cloudflare Workers port (Hono + Drizzle + D1/KV) of the **key**, **model**, **billing** (with a monthly token quota check) and **subscriptions** (employees request access to a service and admins review it) services. All four verify the same JWT that ai-panel-user issues (shared `JWT_SECRET`). Service-to-service endpoints require an `X-Internal-Token`. |
 
-> Note: the gateway's provider type catalog lists many providers. Runtime clients exist for **OpenAI** and **Anthropic**. Other providers work through an OpenAI-compatible base URL configured in the provider settings.
+> Note: the channel service (`/v1/chat/completions` on port `8086`) has native adapters for **OpenAI**, **Anthropic** and **any OpenAI-compatible server** (vLLM, Ollama, SGLang, LM Studio, DeepSeek, Moonshot, Zhipu, Qwen, SiliconFlow, OpenRouter, …). The gateway path `/api/v1/chat/completions` goes to ai-panel-dispatch, which still only has basic OpenAI and Anthropic clients (see [Known limitations](#known-limitations)).
 
 ## Architecture
 
@@ -150,7 +150,9 @@ curl http://localhost:8080/api/v1/chat/completions \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-The channel service also serves the standard OpenAI paths (`/v1/chat/completions`, `/v1/models`) on port `8086`. Point any OpenAI SDK's `base_url` at it.
+The channel service also serves the standard OpenAI paths (`/v1/chat/completions`, `/v1/models`) on port `8086`. Point any OpenAI SDK's `base_url` at it (`http://localhost:8086/v1`) and use a channel API key.
+
+**Self-hosted models and tool calling:** to serve Qwen, DeepSeek, GLM and other models from your own vLLM or Ollama servers, and to use function/tool calling through ai-panel, see **[docs/self-hosted-models.md](docs/self-hosted-models.md)**.
 
 ## Local development
 
@@ -199,7 +201,8 @@ All four workers fail closed: if `JWT_SECRET` / `INTERNAL_API_TOKEN` are not con
 ```bash
 npm --prefix ai-panel-ui test              # Playwright E2E
 (cd workers/key && npm test)               # workers: Vitest auth tests (key, model, billing, subscriptions)
-mvn test                                   # backend unit tests (gateway JWT/admin filter, CORS, user-service admin guard)
+mvn test                                   # backend unit tests (gateway JWT/admin filter, CORS, user-service admin guard,
+                                           #   channel adapters/routing/tool calling against a mock upstream)
 ```
 
 ## Configuration
@@ -210,14 +213,14 @@ All services read their settings from environment variables (Spring `${VAR:defau
 |---|---|---|
 | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE` | all DB-backed services | MySQL connection (one database per service: `ai_panel_user`, `ai_panel_key`, `ai_panel_dispatch`, `ai_panel_model`, `ai_panel_billing`, …) |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | gateway, key, dispatch, channel, billing, … | Redis connection |
-| `JWT_SECRET` | user, gateway, all workers | HMAC secret for console JWTs. **Required; must be identical everywhere.** |
+| `JWT_SECRET` | user, gateway, channel, all workers | HMAC secret for console JWTs. **Required; must be identical everywhere.** Without it the channel service's admin APIs (`/api/v1/providers`, `/api/v1/channels`) are disabled. |
 | `INTERNAL_API_TOKEN` | dispatch, workers/key, workers/billing | Shared secret sent as `X-Internal-Token` on service-to-service calls (e.g. the dispatch → billing quota check) |
 | `CORS_ALLOWED_ORIGINS` | gateway, dispatch | Comma-separated browser origins allowed to call the API, e.g. `https://panel.example.com`. Default (dev only): `http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000`. **Required by `docker-compose.prod.yml`.** See [CORS](#cors). |
 | `JWT_ACCESS_EXPIRATION`, `JWT_REFRESH_EXPIRATION` | user | Token lifetimes in seconds (default 3600 / 604800) |
 | `EUREKA_URL` | all clients | Registry URL, e.g. `http://admin:<pwd>@eureka:8761/eureka/` |
 | `EUREKA_USER`, `EUREKA_PASSWORD` | eureka | Registry basic-auth credentials (**password is required**) |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | dispatch, channel | OpenAI credentials and endpoint |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | dispatch, channel | Anthropic credentials and endpoint |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | dispatch, channel | OpenAI credentials and endpoint (channel: used as a fallback only when `OPENAI_ENABLED=true`; providers configured in the console take precedence) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | dispatch, channel | Anthropic credentials and endpoint (channel: fallback when `ANTHROPIC_ENABLED=true`) |
 | `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY` (+ `*_BASE_URL`) | dispatch, channel | Other providers |
 | `BILLING_QUOTA_CHECK_URL` | dispatch | Quota check endpoint (default: billing worker on `:8789`) |
 | `APOLLO_ENABLED`, `APOLLO_META` | services | Optional Apollo config center (disabled by default) |
@@ -232,6 +235,8 @@ Each user has a `role` (`USER` or `ADMIN`, column `t_user.role`). ai-panel-user 
 2. **User service** (`AdminAuthInterceptor`): verifies the bearer token itself (it ignores `X-User-ID`) and checks `t_user.role` in the database, so demoting a user takes effect immediately even though their token is valid for up to an hour.
 
 The seeded `admin` account has `role = 'ADMIN'`; new registrations get `USER`. To promote someone: `UPDATE ai_panel_user.t_user SET role = 'ADMIN' WHERE username = '…';` (they need to sign in again to get a token with the new claim). Upgrading a database created before roles existed: run `scripts/sql/migrations/V006__user_role.sql`. The console hides the delivery pages for non-admins.
+
+The channel service's management APIs (`/api/v1/providers/**`: upstream providers, keys and models; `/api/v1/channels/**`: sales channels and bulk key generation) are admin-only too. The gateway applies the same 401/403 rules, and ai-panel-channel verifies the admin JWT itself (`AdminJwtInterceptor`), because the console's nginx proxies `/api/v1/providers` straight to it. Without `JWT_SECRET` these APIs answer `503`.
 
 The Workers accept either the `role=ADMIN` claim or a username listed in `ADMIN_USERNAMES`.
 
@@ -280,10 +285,15 @@ This is an early-stage project (`1.0.0-SNAPSHOT`). Known gaps, which are good fi
 
 - `docker-compose.dev.yml` does not start `ai-panel-model` yet, and there is no `Dockerfile.model`.
 - `docker-compose.prod.yml` mounts `deploy/nginx/nginx.conf` and `deploy/nginx/ssl/`. Neither is in the repo, so provide your own.
-- Runtime provider clients exist for OpenAI and Anthropic. Other providers use the OpenAI-compatible path.
+- Two chat entry points exist. The channel service (`:8086/v1/chat/completions`, channel API keys) has the full provider support: self-hosted/OpenAI-compatible providers, arbitrary model names and tool calling. The gateway route `/api/v1/chat/completions` goes to ai-panel-dispatch, whose OpenAI/Anthropic clients don't support tools or custom providers yet, and the gateway has no route to the channel's `/v1/**` API. Merging the two paths is the next step.
+- Azure OpenAI (deployment-based URLs) has no adapter yet. Gemini works through its OpenAI-compatible endpoint (type `google`).
+- The Anthropic adapter covers text, images, tools and thinking deltas. Prompt caching, citations, PDFs and server tools are not mapped.
+- Provider API keys are stored in plain text in `provider_api_key.api_key`. Restrict database access, or contribute encryption at rest.
+- Billing in the channel service uses a flat placeholder rate per token. Per-model prices on `provider_model` are not applied yet.
+- Upgrading an existing database: run `scripts/sql/migrations/V007__provider_multi_instance.sql` to allow several providers of the same type.
 - The Spring services trust the `X-User-ID` header set by the gateway (the gateway strips any client-supplied value). Only expose the gateway, never the individual services. `docker-compose.dev.yml` publishes service ports for debugging; don't use it on an untrusted network.
 - Actuator health details are public. Tighten them for production.
-- Backend unit tests only cover the security filters so far.
+- Backend unit tests cover the security filters and the channel service's adapters/routing. Other services have none yet.
 
 ## Security
 
@@ -311,6 +321,7 @@ Released under the [MIT License](LICENSE). Copyright (c) 2026 ai-dashboad.
 - **统一接入**:`/v1/chat/completions`、`/v1/models`,支持同步与 SSE 流式响应;
 - **API Key 管理**:为用户、团队或渠道签发与吊销自有 `sk-` Key,只存 SHA-256 哈希,可设置模型白名单和过期时间;
 - **上游 Key 池**:加权轮询、故障自动切换,支持一键或批量配置供应商;
+- **自部署模型**:接入 vLLM、Ollama 或任意 OpenAI 兼容服务(自定义 Base URL、API Key 可选),支持任意模型名(如 `Qwen/Qwen3-32B`、`glm-4.5`、`deepseek-r1`)及 Tool Calling 透传(含流式 `tool_calls`),详见 [docs/self-hosted-models.md](docs/self-hosted-models.md);
 - **智能路由**:基于 Resilience4j 熔断与模型降级链(fallback chain);
 - **限流与配额**:Redis + Lua 令牌桶,分全局、用户套餐、单 Key 三级限流;
 - **用量与计费**:用量记录、余额、充值、看板统计与模型健康度;

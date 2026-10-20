@@ -97,6 +97,8 @@ class JwtAuthFilterTest {
 
     @Test
     void adminPathWithNonAdminTokenIs403() {
+        assertThat(run(get("/api/v1/providers", token("USER")).build()).status()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(run(get("/api/v1/channels", null).build()).status()).isEqualTo(HttpStatus.UNAUTHORIZED);
         Result user = run(get("/api/v1/admin/platforms", token("USER")).build());
         assertThat(user.forwarded()).isNull();
         assertThat(user.status()).isEqualTo(HttpStatus.FORBIDDEN);
@@ -157,5 +159,9 @@ class JwtAuthFilterTest {
     void lookalikePrefixesAreNotTreatedAsAdmin() {
         assertThat(JwtAuthFilter.isAdminPath("/api/v1/administrator")).isFalse();
         assertThat(JwtAuthFilter.isAdminPath("/api/v1/admin/x")).isTrue();
+        assertThat(JwtAuthFilter.isAdminPath("/api/v1/providers")).isTrue();
+        assertThat(JwtAuthFilter.isAdminPath("/api/v1/providers/3/models")).isTrue();
+        assertThat(JwtAuthFilter.isAdminPath("/api/v1/channels/keys/generate")).isTrue();
+        assertThat(JwtAuthFilter.isAdminPath("/api/v1/providersx")).isFalse();
     }
 }
