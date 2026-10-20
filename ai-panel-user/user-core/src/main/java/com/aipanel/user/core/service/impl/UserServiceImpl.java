@@ -1,5 +1,6 @@
 package com.aipanel.user.core.service.impl;
 
+import com.aipanel.user.core.security.UserRole;
 import com.aipanel.common.enums.ErrorCode;
 import com.aipanel.common.enums.PlanType;
 import com.aipanel.common.exception.BusinessException;
@@ -56,6 +57,7 @@ public class UserServiceImpl implements UserService {
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user.setDisplayName(request.getDisplayName() != null ? request.getDisplayName() : request.getUsername());
         user.setStatus(1);
+        user.setRole(UserRole.USER);
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
 
@@ -95,7 +97,7 @@ public class UserServiceImpl implements UserService {
         UserPlanPO plan = userPlanDataService.findActiveByUserId(user.getId());
 
         // Generate tokens
-        String accessToken = jwtService.generateAccessToken(user.getId(), user.getUsername());
+        String accessToken = jwtService.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
         String refreshToken = jwtService.generateRefreshToken(user.getId());
 
         // Update last login
@@ -129,7 +131,7 @@ public class UserServiceImpl implements UserService {
         UserPlanPO plan = userPlanDataService.findActiveByUserId(user.getId());
 
         // Generate new tokens
-        String newAccessToken = jwtService.generateAccessToken(user.getId(), user.getUsername());
+        String newAccessToken = jwtService.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
         String newRefreshToken = jwtService.generateRefreshToken(user.getId());
 
         UserResponse userResponse = convertToResponse(user, plan);
@@ -240,12 +242,24 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    @Override
+    public boolean isAdmin(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+        UserPO user = userDataService.getById(userId);
+        return user != null
+            && Integer.valueOf(1).equals(user.getStatus())
+            && UserRole.isAdmin(user.getRole());
+    }
+
     private UserResponse convertToResponse(UserPO user, UserPlanPO plan) {
         UserResponse.UserResponseBuilder builder = UserResponse.builder()
             .id(user.getId())
             .username(user.getUsername())
             .email(user.getEmail())
             .displayName(user.getDisplayName())
+            .role(UserRole.normalize(user.getRole()))
             .status(user.getStatus())
             .timezone(user.getTimezone())
             .language(user.getLanguage())

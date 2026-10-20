@@ -13,8 +13,9 @@ migrations_dir = "migrations"
 # Uniform starting monthly quota (in tokens) applied to every employee.
 # There's no per-user override yet — everyone shares this same default.
 DEFAULT_MONTHLY_QUOTA_TOKENS = "1000000"
-# Comma-separated usernames (JWT "username" claim) allowed to view any user's
-# usage and to add credits.
+# Admins: tokens with the role=ADMIN claim (t_user.role in ai-panel-user) are always
+# admins. Usernames listed here (comma-separated, JWT "username" claim) are admins too,
+# which helps when the workers run without the Spring user service.
 ADMIN_USERNAMES = "admin"
 
 [observability]

@@ -30,6 +30,10 @@ public class UserPO implements Serializable {
     @TableField("display_name")
     private String displayName;
 
+    /** USER or ADMIN (see {@code UserRole}); ADMIN is required for /api/v1/admin/**. */
+    @TableField("role")
+    private String role;
+
     @TableField("status")
     private Integer status;
 

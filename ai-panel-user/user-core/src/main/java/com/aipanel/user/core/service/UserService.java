@@ -98,4 +98,10 @@ public interface UserService {
      * @return User ID or null if invalid
      */
     Long getUserIdFromToken(String token);
+
+    /**
+     * Whether the given user exists, is active and has role ADMIN (read from the database,
+     * so demotions take effect immediately rather than when the access token expires).
+     */
+    boolean isAdmin(Long userId);
 }

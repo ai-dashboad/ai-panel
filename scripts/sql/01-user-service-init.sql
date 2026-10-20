@@ -1,23 +1,20 @@
 -- AI Panel User Service Database Schema
 USE ai_panel_user;
 
--- User table
+-- User table (columns match com.aipanel.user.data.mysql.po.UserPO)
 CREATE TABLE IF NOT EXISTS t_user (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) NOT NULL UNIQUE,
     email VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
-    nickname VARCHAR(50),
-    avatar_url VARCHAR(500),
-    phone VARCHAR(20),
+    display_name VARCHAR(100),
+    role VARCHAR(20) NOT NULL DEFAULT 'USER' COMMENT 'USER or ADMIN; ADMIN may call /api/v1/admin/**',
     status TINYINT DEFAULT 1 COMMENT '0=disabled, 1=active, 2=suspended',
-    email_verified TINYINT DEFAULT 0,
-    phone_verified TINYINT DEFAULT 0,
-    last_login_time DATETIME,
-    last_login_ip VARCHAR(50),
-    create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    deleted TINYINT DEFAULT 0,
+    timezone VARCHAR(50) DEFAULT 'UTC',
+    language VARCHAR(10) DEFAULT 'en',
+    last_login_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_email (email),
     INDEX idx_username (username),
     INDEX idx_status (status)
@@ -36,6 +33,7 @@ CREATE TABLE IF NOT EXISTS t_user_plan (
     start_date DATE,
     end_date DATE,
     auto_renew TINYINT DEFAULT 0,
+    is_active TINYINT DEFAULT 1,
     create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     deleted TINYINT DEFAULT 0,
@@ -48,9 +46,9 @@ CREATE TABLE IF NOT EXISTS t_user_plan (
 -- Default credentials: admin / admin123  (bcrypt, cost 10)
 -- SECURITY: this password is public. Change it immediately after first login,
 -- or replace this hash before deploying anywhere reachable from the network.
-INSERT INTO t_user (username, email, password_hash, nickname, status, email_verified)
-VALUES ('admin', 'admin@aipanel.com', '$2a$10$osspWes8LbHxo1UePWJKf.BVWKgw.zDAz6dn4CmvR9NPs36xgv/Ii', 'Administrator', 1, 1)
-ON DUPLICATE KEY UPDATE update_time = CURRENT_TIMESTAMP;
+INSERT INTO t_user (username, email, password_hash, display_name, role, status)
+VALUES ('admin', 'admin@aipanel.com', '$2a$10$osspWes8LbHxo1UePWJKf.BVWKgw.zDAz6dn4CmvR9NPs36xgv/Ii', 'Administrator', 'ADMIN', 1)
+ON DUPLICATE KEY UPDATE role = 'ADMIN';
 
 -- Insert default plan for admin
 INSERT INTO t_user_plan (user_id, plan_type, monthly_quota, rate_limit_per_minute, rate_limit_per_day, max_api_keys)

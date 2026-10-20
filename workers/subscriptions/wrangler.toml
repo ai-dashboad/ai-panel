@@ -10,9 +10,9 @@ database_id = "REPLACE_WITH_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
 [vars]
-# Comma-separated usernames (matching the "username" claim in ai-panel-user's JWT)
-# allowed to review subscription requests. There is no role/admin concept in
-# ai-panel-user yet, so this is a deliberately simple allowlist rather than full RBAC.
+# Admins: tokens with the role=ADMIN claim (t_user.role in ai-panel-user) are always
+# admins. Usernames listed here (comma-separated, JWT "username" claim) are admins too,
+# which helps when the workers run without the Spring user service.
 ADMIN_USERNAMES = "admin"
 
 [observability]

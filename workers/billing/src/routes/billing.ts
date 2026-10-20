@@ -37,7 +37,7 @@ function resolveTargetUserId(c: UserCtx): number | null {
   const requested = Number(raw)
   if (!Number.isSafeInteger(requested)) return null
   if (requested === auth.userId) return requested
-  return isAdmin(auth.username, c.env.ADMIN_USERNAMES) ? requested : null
+  return isAdmin(auth, c.env.ADMIN_USERNAMES) ? requested : null
 }
 
 billingRoutes.get('/quota-check', async (c) => {
@@ -169,7 +169,7 @@ billingRoutes.get('/balance', async (c) => {
 
 billingRoutes.post('/credits', async (c) => {
   const auth = c.get('auth')
-  if (!auth || !isAdmin(auth.username, c.env.ADMIN_USERNAMES)) return failRaw(c, 403, 'Admin privileges required')
+  if (!auth || !isAdmin(auth, c.env.ADMIN_USERNAMES)) return failRaw(c, 403, 'Admin privileges required')
   const userId = Number(c.req.query('userId'))
   const amount = Number(c.req.query('amount'))
   if (!Number.isFinite(userId) || !Number.isFinite(amount)) {

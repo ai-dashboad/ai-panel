@@ -216,3 +216,5 @@ mvn test -DskipITs
 - Rate limiting with Redis Lua scripts
 - No secrets in code - use environment variables (`JWT_SECRET`, `EUREKA_PASSWORD`, `MYSQL_PASSWORD`, provider keys)
 - Workers verify the same HMAC-signed JWT as ai-panel-user (shared `JWT_SECRET`); internal endpoints require `INTERNAL_API_TOKEN`
+- `/api/v1/admin/**` requires `role=ADMIN` (JWT `role` claim from `t_user.role`), enforced in the gateway `JwtAuthFilter` and the user-service `AdminAuthInterceptor`; the gateway strips client-supplied `X-User-ID`/`X-User-Role`
+- CORS is an allowlist (`CORS_ALLOWED_ORIGINS`); never reintroduce `allowedOrigins("*")`

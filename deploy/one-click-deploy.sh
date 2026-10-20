@@ -49,6 +49,7 @@ load_env() {
 MYSQL_PASSWORD=$(openssl rand -hex 16)
 EUREKA_PASSWORD=$(openssl rand -hex 16)
 JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n')
+CORS_ALLOWED_ORIGINS=http://localhost:3000
 REDIS_PASSWORD=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=

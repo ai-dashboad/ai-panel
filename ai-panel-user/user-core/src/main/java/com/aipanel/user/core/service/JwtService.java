@@ -12,7 +12,7 @@ public interface JwtService {
      * @param username Username
      * @return Access token
      */
-    String generateAccessToken(Long userId, String username);
+    String generateAccessToken(Long userId, String username, String role);
 
     /**
      * Generate refresh token

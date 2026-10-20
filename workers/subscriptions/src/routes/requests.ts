@@ -82,7 +82,7 @@ requestRoutes.delete('/:id', async (c) => {
 })
 
 function requireAdmin(c: { get: (key: 'auth') => AuthContext; env: Bindings }) {
-  return isAdmin(c.get('auth').username, c.env.ADMIN_USERNAMES)
+  return isAdmin(c.get('auth'), c.env.ADMIN_USERNAMES)
 }
 
 requestRoutes.get('/', async (c) => {

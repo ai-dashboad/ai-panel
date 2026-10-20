@@ -5,8 +5,8 @@ import app from '../src/index'
 const SECRET = 'unit-test-secret-that-is-at-least-32-bytes-long!!'
 const env = { DB: {} as D1Database, JWT_SECRET: SECRET, ADMIN_USERNAMES: 'admin' }
 
-const token = (username: string) =>
-  new SignJWT({ username, type: 'access' })
+const token = (username: string, role = 'USER') =>
+  new SignJWT({ username, role, type: 'access' })
     .setProtectedHeader({ alg: 'HS256' })
     .setSubject('7')
     .setExpirationTime('1h')
@@ -43,5 +43,11 @@ describe('model worker auth', () => {
     expect((await call('/api/v1/models/providers/openai/sync', init(bob, 'POST'))).code).toBe(403)
     const admin = await token('admin')
     expect([401, 403]).not.toContain((await call('/api/v1/models/providers/openai/sync', init(admin, 'POST'))).code)
+  })
+
+  it('also accepts the role=ADMIN claim for users not in ADMIN_USERNAMES', async () => {
+    const init = (t: string) => ({ method: 'POST', headers: { Authorization: `Bearer ${t}` } })
+    const carol = await token('carol', 'ADMIN')
+    expect([401, 403]).not.toContain((await call('/api/v1/models/providers/openai/sync', init(carol))).code)
   })
 })

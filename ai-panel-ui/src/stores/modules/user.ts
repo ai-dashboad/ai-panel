@@ -9,6 +9,7 @@ export const useUserStore = defineStore('user', () => {
   const language = ref<string>('en')
 
   const isLoggedIn = computed(() => !!token.value)
+  const isAdmin = computed(() => userInfo.value?.role?.toUpperCase() === 'ADMIN')
 
   async function login(data: LoginRequest) {
     const res = await userApi.login(data)
@@ -42,6 +43,7 @@ export const useUserStore = defineStore('user', () => {
     userInfo,
     language,
     isLoggedIn,
+    isAdmin,
     login,
     register,
     logout,

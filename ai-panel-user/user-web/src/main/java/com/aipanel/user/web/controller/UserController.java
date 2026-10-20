@@ -62,7 +62,19 @@ public class UserController {
     @Operation(summary = "Get user by ID")
     public R<UserResponse> getUserById(
             @Parameter(description = "User ID", required = true)
-            @PathVariable Long id) {
+            @PathVariable Long id,
+            @RequestHeader(value = CommonConstants.HEADER_USER_ID, required = false) Long currentUserId,
+            @RequestHeader(value = "Authorization", required = false) String authorization) {
+        if (currentUserId == null && authorization != null && authorization.startsWith("Bearer ")) {
+            currentUserId = userService.getUserIdFromToken(authorization.substring(7));
+        }
+        if (currentUserId == null) {
+            return R.fail(401, "Not authenticated");
+        }
+        // Profiles (email, plan, ...) are visible only to their owner or an admin.
+        if (!currentUserId.equals(id) && !userService.isAdmin(currentUserId)) {
+            return R.fail(403, "Not authorized to view this user");
+        }
         UserResponse user = userService.getUserById(id);
         return R.ok(user);
     }

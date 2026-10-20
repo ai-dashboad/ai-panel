@@ -30,6 +30,9 @@ public class UserResponse {
     @Schema(description = "Display name", example = "John Doe")
     private String displayName;
 
+    @Schema(description = "User role: USER or ADMIN", example = "USER")
+    private String role;
+
     @Schema(description = "User status: 1-active, 0-inactive", example = "1")
     private Integer status;
 

@@ -39,7 +39,7 @@ app.use('*', async (c, next) => {
   c.set('auth', auth)
   const method = c.req.method.toUpperCase()
   const readOnly = method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
-  if (!readOnly && !isAdmin(auth.username, c.env.ADMIN_USERNAMES)) {
+  if (!readOnly && !isAdmin(auth, c.env.ADMIN_USERNAMES)) {
     return failRaw(c, 403, 'Admin privileges required')
   }
   return next()

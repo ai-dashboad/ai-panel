@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/modules/user'
 import { ElMessageBox } from 'element-plus'
@@ -74,22 +74,32 @@ const userStore = useUserStore()
 
 const isCollapsed = ref(false)
 
-const menuItems = [
+const allMenuItems = [
   { path: '/dashboard', title: 'Dashboard', icon: 'Odometer' },
   { path: '/api-keys', title: 'API Keys', icon: 'Key' },
   { path: '/providers', title: 'Providers', icon: 'Connection' },
   { path: '/models', title: 'Models', icon: 'Cpu' },
   { path: '/usage', title: 'Usage & Billing', icon: 'DataLine' },
   { path: '/subscription-requests', title: 'Subscription Requests', icon: 'Tickets' },
-  { path: '/delivery/platforms', title: 'Platforms', icon: 'Shop' },
-  { path: '/delivery/skus', title: 'Product SKUs', icon: 'Goods' },
-  { path: '/delivery/orders', title: 'Orders', icon: 'List' },
+  { path: '/delivery/platforms', title: 'Platforms', icon: 'Shop', adminOnly: true },
+  { path: '/delivery/skus', title: 'Product SKUs', icon: 'Goods', adminOnly: true },
+  { path: '/delivery/orders', title: 'Orders', icon: 'List', adminOnly: true },
   { path: '/settings', title: 'Settings', icon: 'Setting' },
 ]
 
+// Delivery pages call /api/v1/admin/**, which the backend restricts to role=ADMIN.
+const menuItems = computed(() => allMenuItems.filter(m => !m.adminOnly || userStore.isAdmin))
+
+onMounted(() => {
+  // userInfo is not persisted; reload it so role-based menu items render after a refresh.
+  if (userStore.isLoggedIn && !userStore.userInfo) {
+    userStore.fetchUserInfo().catch(() => {})
+  }
+})
+
 const currentRoute = computed(() => route.path)
 const currentTitle = computed(() => {
-  const item = menuItems.find(m => route.path.startsWith(m.path))
+  const item = allMenuItems.find(m => route.path.startsWith(m.path))
   return item?.title || ''
 })
 

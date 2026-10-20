@@ -2,7 +2,7 @@ import { jwtVerify } from 'jose'
 
 // Mirrors ai-panel-user's JwtServiceImpl / ai-panel-gateway's JwtAuthFilter:
 // - HMAC-signed JWT, secret shared across services via JWT_SECRET
-// - subject = userId, claim "username", claim "type" must be "access"
+// - subject = userId, claim "username", claim "role" (USER/ADMIN), claim "type" must be "access"
 // jjwt's Keys.hmacShaKeyFor picks HS256/384/512 from the secret length, so all three
 // HMAC variants are accepted (and nothing else — "none"/RSA tokens are rejected).
 const HMAC_ALGS = ['HS256', 'HS384', 'HS512']
@@ -10,6 +10,8 @@ const HMAC_ALGS = ['HS256', 'HS384', 'HS512']
 export interface AuthContext {
   userId: number
   username: string | null
+  /** "ADMIN" or "USER" (from the token's role claim; tokens without one are treated as USER). */
+  role: 'ADMIN' | 'USER'
 }
 
 export class AuthError extends Error {}
@@ -40,10 +42,22 @@ export async function verifyAccessToken(authHeader: string | undefined, jwtSecre
     throw new AuthError('Token missing subject')
   }
 
-  return { userId, username: typeof payload.username === 'string' ? payload.username : null }
+  const role = typeof payload.role === 'string' && payload.role.trim().toUpperCase() === 'ADMIN' ? 'ADMIN' : 'USER'
+  return { userId, username: typeof payload.username === 'string' ? payload.username : null, role }
 }
 
-export function isAdmin(username: string | null, adminUsernamesCsv: string | undefined): boolean {
+/**
+ * Admin if the token carries role=ADMIN (issued by ai-panel-user from t_user.role), or — for
+ * deployments that run the workers without the Spring user service's role column — if the
+ * username is listed in ADMIN_USERNAMES.
+ */
+export function isAdmin(
+  auth: Pick<AuthContext, 'username' | 'role'> | null | undefined,
+  adminUsernamesCsv: string | undefined,
+): boolean {
+  if (!auth) return false
+  if (auth.role === 'ADMIN') return true
+  const username = auth.username
   if (!username || !adminUsernamesCsv) return false
   const admins = adminUsernamesCsv
     .split(',')

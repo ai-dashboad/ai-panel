@@ -1,6 +1,7 @@
 package com.aipanel.user.core.service.impl;
 
 import com.aipanel.user.core.service.JwtService;
+import com.aipanel.user.core.security.UserRole;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.Jwts;
@@ -36,13 +37,15 @@ public class JwtServiceImpl implements JwtService {
     }
 
     @Override
-    public String generateAccessToken(Long userId, String username) {
+    public String generateAccessToken(Long userId, String username, String role) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + accessTokenExpiration * 1000);
 
         return Jwts.builder()
             .subject(userId.toString())
             .claim("username", username)
+            // Role claim lets the gateway (and workers) enforce admin-only routes without a DB lookup.
+            .claim("role", UserRole.normalize(role))
             .claim("type", "access")
             .issuedAt(now)
             .expiration(expiryDate)

@@ -6,6 +6,8 @@ export interface UserInfo {
   avatarUrl?: string
   timezone?: string
   language?: string
+  /** USER or ADMIN. Only ADMIN may use /api/v1/admin/** (delivery pages). */
+  role?: string
   status: number
   planType: string
   planExpiresAt?: string

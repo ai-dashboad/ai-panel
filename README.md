@@ -129,7 +129,7 @@ Once the containers are healthy:
 | Eureka dashboard | http://localhost:8761 (basic auth: `EUREKA_USER` / `EUREKA_PASSWORD`) |
 | Dispatch Swagger UI | http://localhost:8082/swagger-ui.html |
 
-On first start, MySQL runs the scripts in `scripts/sql/`, which create the databases and tables. They also seed a default admin account:
+On first start, MySQL runs the scripts in `scripts/sql/`, which create the databases and tables. They also seed a default admin account (`role = ADMIN`):
 
 | Username | Password |
 |---|---|
@@ -185,7 +185,7 @@ For local secrets, copy `workers/<name>/.dev.vars.example` to `.dev.vars` in eac
 
 Worker auth model:
 
-| Worker | User endpoints (Bearer JWT from ai-panel-user) | Admin-only (`ADMIN_USERNAMES`) | Internal (`X-Internal-Token: $INTERNAL_API_TOKEN`) |
+| Worker | User endpoints (Bearer JWT from ai-panel-user) | Admin-only (`role=ADMIN` claim or `ADMIN_USERNAMES`) | Internal (`X-Internal-Token: $INTERNAL_API_TOKEN`) |
 |---|---|---|---|
 | `key` | all `/api/v1/keys/**` (the user id comes from the token's `sub`) | — | `GET /validate`, `POST /internal/validate` |
 | `model` | all reads | `POST`/`PUT`/`DELETE` on models, provider sync | — |
@@ -199,7 +199,7 @@ All four workers fail closed: if `JWT_SECRET` / `INTERNAL_API_TOKEN` are not con
 ```bash
 npm --prefix ai-panel-ui test              # Playwright E2E
 (cd workers/key && npm test)               # workers: Vitest auth tests (key, model, billing, subscriptions)
-mvn test                                   # backend (no unit tests yet – contributions welcome)
+mvn test                                   # backend unit tests (gateway JWT/admin filter, CORS, user-service admin guard)
 ```
 
 ## Configuration
@@ -212,6 +212,7 @@ All services read their settings from environment variables (Spring `${VAR:defau
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | gateway, key, dispatch, channel, billing, … | Redis connection |
 | `JWT_SECRET` | user, gateway, all workers | HMAC secret for console JWTs. **Required; must be identical everywhere.** |
 | `INTERNAL_API_TOKEN` | dispatch, workers/key, workers/billing | Shared secret sent as `X-Internal-Token` on service-to-service calls (e.g. the dispatch → billing quota check) |
+| `CORS_ALLOWED_ORIGINS` | gateway, dispatch | Comma-separated browser origins allowed to call the API, e.g. `https://panel.example.com`. Default (dev only): `http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000`. **Required by `docker-compose.prod.yml`.** See [CORS](#cors). |
 | `JWT_ACCESS_EXPIRATION`, `JWT_REFRESH_EXPIRATION` | user | Token lifetimes in seconds (default 3600 / 604800) |
 | `EUREKA_URL` | all clients | Registry URL, e.g. `http://admin:<pwd>@eureka:8761/eureka/` |
 | `EUREKA_USER`, `EUREKA_PASSWORD` | eureka | Registry basic-auth credentials (**password is required**) |
@@ -222,6 +223,26 @@ All services read their settings from environment variables (Spring `${VAR:defau
 | `APOLLO_ENABLED`, `APOLLO_META` | services | Optional Apollo config center (disabled by default) |
 | `SERVER_PORT`, `SPRING_PROFILES_ACTIVE` | services | Standard Spring Boot settings |
 | `DOCKER_REGISTRY`, `VERSION` | `docker-compose.prod.yml` | Image registry and tag for production deployments |
+
+### Roles and admin APIs
+
+Each user has a `role` (`USER` or `ADMIN`, column `t_user.role`). ai-panel-user puts it in the access token as the `role` claim. The `/api/v1/admin/**` routes (delivery platforms, SKUs, orders) are admin-only, and this is enforced twice:
+
+1. **Gateway** (`JwtAuthFilter`): no valid access token → `401`, token without `role=ADMIN` → `403`. The gateway also strips client-supplied `X-User-ID` / `X-User-Role` / `X-Plan-Type` headers on every request and does not expose `/api/v1/**/internal/**` endpoints.
+2. **User service** (`AdminAuthInterceptor`): verifies the bearer token itself (it ignores `X-User-ID`) and checks `t_user.role` in the database, so demoting a user takes effect immediately even though their token is valid for up to an hour.
+
+The seeded `admin` account has `role = 'ADMIN'`; new registrations get `USER`. To promote someone: `UPDATE ai_panel_user.t_user SET role = 'ADMIN' WHERE username = '…';` (they need to sign in again to get a token with the new claim). Upgrading a database created before roles existed: run `scripts/sql/migrations/V006__user_role.sql`. The console hides the delivery pages for non-admins.
+
+The Workers accept either the `role=ADMIN` claim or a username listed in `ADMIN_USERNAMES`.
+
+### CORS
+
+The gateway (and dispatch) only send CORS headers to origins listed in `CORS_ALLOWED_ORIGINS` (comma-separated, `scheme://host[:port]`, no paths; Spring origin patterns such as `https://*.example.com` work too). Preflight and cross-origin requests from any other origin get `403`. Credentials (cookies) are never allowed, because the API uses bearer tokens.
+
+- **Dev:** the default covers the Vite dev server (`:5173`) and the Docker UI (`:3000`). Both proxy `/api` to the gateway, but they forward the browser's `Origin`, so the origin still has to be allowed.
+- **Production:** `docker-compose.prod.yml` refuses to start unless `CORS_ALLOWED_ORIGINS` is set. An empty value rejects every cross-origin request. `*` is accepted only as the sole entry, as an explicit opt-in, and logs a warning.
+
+The Workers send no CORS headers, so browsers can only reach them through a same-origin proxy (as the Vite config does).
 
 You can also add provider keys at runtime from the **Providers** page or the setup wizard. Those keys are stored in the database and served from the key pool.
 
@@ -260,16 +281,16 @@ This is an early-stage project (`1.0.0-SNAPSHOT`). Known gaps, which are good fi
 - `docker-compose.dev.yml` does not start `ai-panel-model` yet, and there is no `Dockerfile.model`.
 - `docker-compose.prod.yml` mounts `deploy/nginx/nginx.conf` and `deploy/nginx/ssl/`. Neither is in the repo, so provide your own.
 - Runtime provider clients exist for OpenAI and Anthropic. Other providers use the OpenAI-compatible path.
-- **Authorization is coarse.** The Spring services have no role model. Any signed-in user can call the `/api/v1/admin/**` routes (platforms, SKUs, orders), so restrict them at your reverse proxy if your deployment has untrusted users. The Workers use a simple `ADMIN_USERNAMES` allow-list.
-- The Spring services trust the `X-User-ID` header set by the gateway. Only expose the gateway, never the individual services.
-- The gateway's CORS policy is `*`, and actuator health details are public. Tighten both for production.
-- There are no backend unit tests yet.
+- The Spring services trust the `X-User-ID` header set by the gateway (the gateway strips any client-supplied value). Only expose the gateway, never the individual services. `docker-compose.dev.yml` publishes service ports for debugging; don't use it on an untrusted network.
+- Actuator health details are public. Tighten them for production.
+- Backend unit tests only cover the security filters so far.
 
 ## Security
 
 - Never commit `.env` or `.dev.vars`. Only `.env.example` belongs in git.
 - Always set strong values for `JWT_SECRET`, `EUREKA_PASSWORD` and `MYSQL_PASSWORD`. The services intentionally refuse to start without a JWT secret.
 - Change the seeded admin password (`admin` / `admin123`) right after the first login.
+- Set `CORS_ALLOWED_ORIGINS` to the exact origin(s) your console is served from (see [CORS](#cors)).
 - Give each Cloudflare Worker its own `JWT_SECRET` (identical to ai-panel-user's) and `INTERNAL_API_TOKEN` via `wrangler secret put`.
 - To report a vulnerability, please open a private security advisory on GitHub rather than a public issue.
 

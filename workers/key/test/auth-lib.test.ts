@@ -17,7 +17,7 @@ describe('verifyAccessToken', () => {
   it('accepts an access token shaped like ai-panel-user issues (HS256/384/512)', async () => {
     for (const alg of ['HS256', 'HS384', 'HS512']) {
       const token = await sign({ username: 'alice', type: 'access' }, { sub: '42', alg })
-      await expect(verifyAccessToken(`Bearer ${token}`, SECRET)).resolves.toEqual({ userId: 42, username: 'alice' })
+      await expect(verifyAccessToken(`Bearer ${token}`, SECRET)).resolves.toEqual({ userId: 42, username: 'alice', role: 'USER' })
     }
   })
 
@@ -68,10 +68,24 @@ describe('isValidInternalToken', () => {
 })
 
 describe('isAdmin', () => {
-  it('is case-insensitive and tolerates whitespace', () => {
-    expect(isAdmin('Admin', ' admin , ops ')).toBe(true)
-    expect(isAdmin('bob', 'admin,ops')).toBe(false)
+  it('matches ADMIN_USERNAMES case-insensitively and tolerates whitespace', () => {
+    expect(isAdmin({ username: 'Admin', role: 'USER' }, ' admin , ops ')).toBe(true)
+    expect(isAdmin({ username: 'bob', role: 'USER' }, 'admin,ops')).toBe(false)
+    expect(isAdmin({ username: null, role: 'USER' }, 'admin')).toBe(false)
+    expect(isAdmin({ username: 'admin', role: 'USER' }, undefined)).toBe(false)
     expect(isAdmin(null, 'admin')).toBe(false)
-    expect(isAdmin('admin', undefined)).toBe(false)
+  })
+
+  it('accepts the role=ADMIN claim issued by ai-panel-user', () => {
+    expect(isAdmin({ username: 'carol', role: 'ADMIN' }, undefined)).toBe(true)
+  })
+})
+
+describe('role claim', () => {
+  it('maps role=ADMIN (any case) to ADMIN and anything else to USER', async () => {
+    const admin = await sign({ username: 'carol', role: 'admin', type: 'access' }, { sub: '5', alg: 'HS256' })
+    await expect(verifyAccessToken(`Bearer ${admin}`, SECRET)).resolves.toMatchObject({ role: 'ADMIN' })
+    const other = await sign({ username: 'dave', role: 'superuser', type: 'access' }, { sub: '6', alg: 'HS256' })
+    await expect(verifyAccessToken(`Bearer ${other}`, SECRET)).resolves.toMatchObject({ role: 'USER' })
   })
 })
