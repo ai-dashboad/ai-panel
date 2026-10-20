@@ -38,8 +38,26 @@ public class TokenCounterService {
             // Add tokens for content
             if (message.getContent() instanceof String) {
                 totalTokens += encoding.countTokens((String) message.getContent());
+            } else if (message.getContent() instanceof List<?> parts) {
+                // Content parts: count text, use a flat estimate per image instead of the (base64) URL
+                for (Object part : parts) {
+                    if (part instanceof java.util.Map<?, ?> p && "text".equals(p.get("type")) && p.get("text") != null) {
+                        totalTokens += encoding.countTokens(String.valueOf(p.get("text")));
+                    } else {
+                        totalTokens += 85;
+                    }
+                }
             } else if (message.getContent() != null) {
                 totalTokens += encoding.countTokens(message.getContent().toString());
+            }
+
+            if (message.getToolCalls() != null) {
+                for (ChatCompletionRequest.ToolCall call : message.getToolCalls()) {
+                    if (call.getFunction() != null) {
+                        totalTokens += encoding.countTokens(String.valueOf(call.getFunction().getName()))
+                            + encoding.countTokens(String.valueOf(call.getFunction().getArguments()));
+                    }
+                }
             }
 
             // Add tokens for name if present

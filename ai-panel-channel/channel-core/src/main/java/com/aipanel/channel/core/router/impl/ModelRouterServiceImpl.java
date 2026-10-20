@@ -4,304 +4,279 @@ import com.aipanel.channel.api.dto.request.ChatCompletionRequest;
 import com.aipanel.channel.api.dto.response.ChatCompletionResponse;
 import com.aipanel.channel.api.dto.response.ModelListResponse;
 import com.aipanel.channel.core.pool.ApiKeyPool;
-import com.aipanel.channel.core.pool.DynamicProviderFactory;
 import com.aipanel.channel.core.router.ModelRouterService;
-import com.aipanel.channel.core.router.provider.AiProvider;
-import com.aipanel.channel.core.router.provider.ProviderRegistry;
-import com.aipanel.channel.data.mysql.mapper.ProviderModelMapper;
-import com.aipanel.channel.data.mysql.po.ProviderModelPO;
-import com.aipanel.common.exception.BusinessException;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
-import lombok.RequiredArgsConstructor;
+import com.aipanel.channel.core.upstream.ChatAdapter;
+import com.aipanel.channel.core.upstream.ProviderTypes;
+import com.aipanel.channel.core.upstream.StreamResult;
+import com.aipanel.channel.core.upstream.StreamSink;
+import com.aipanel.channel.core.upstream.UpstreamException;
+import com.aipanel.channel.core.upstream.UpstreamProvider;
+import com.aipanel.channel.core.upstream.UpstreamTarget;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Model router service implementation with fallback support
+ * Model router.
+ * <p>
+ * Resolution order for a model name:
+ * <ol>
+ *   <li>enabled providers that explicitly list the model (provider_model), by provider priority;
+ *       any model name works, e.g. {@code Qwen/Qwen3-32B}, {@code glm-4.5}, {@code deepseek-r1}</li>
+ *   <li>prefix fallback: enabled providers whose type is inferred from the model name
+ *       ({@code gpt-*} -> openai, {@code claude-*} -> anthropic, ...)</li>
+ *   <li>environment fallback: {@code OPENAI_API_KEY} / {@code ANTHROPIC_API_KEY} when
+ *       {@code OPENAI_ENABLED} / {@code ANTHROPIC_ENABLED} are true</li>
+ * </ol>
+ * A provider is usable if it has an available API key, or if its type does not need one
+ * (vllm, ollama, openai_compatible, ...). Retryable failures (connection errors, 429, 5xx,
+ * upstream auth errors) fail over to the next key / provider. Streams only fail over before
+ * the first chunk was sent.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ModelRouterServiceImpl implements ModelRouterService {
 
-    private final ProviderRegistry providerRegistry;
-    private final CircuitBreakerRegistry circuitBreakerRegistry;
-    private final DynamicProviderFactory dynamicProviderFactory;
     private final ApiKeyPool apiKeyPool;
-    private final ProviderModelMapper providerModelMapper;
+    private final List<ChatAdapter> adapters;
 
-    // Model to provider mapping with fallback chains
-    private static final Map<String, List<String>> MODEL_FALLBACK_CHAINS = new ConcurrentHashMap<>();
+    @Value("${spring.ai.openai.enabled:false}")
+    private boolean envOpenAiEnabled;
+    @Value("${spring.ai.openai.api-key:}")
+    private String envOpenAiKey;
+    @Value("${spring.ai.openai.base-url:https://api.openai.com}")
+    private String envOpenAiBaseUrl;
+    @Value("${spring.ai.anthropic.enabled:false}")
+    private boolean envAnthropicEnabled;
+    @Value("${spring.ai.anthropic.api-key:}")
+    private String envAnthropicKey;
+    @Value("${spring.ai.anthropic.base-url:https://api.anthropic.com}")
+    private String envAnthropicBaseUrl;
 
-    static {
-        // GPT models fallback to DeepSeek
-        MODEL_FALLBACK_CHAINS.put("gpt-4", List.of("openai", "anthropic", "deepseek"));
-        MODEL_FALLBACK_CHAINS.put("gpt-4-turbo", List.of("openai", "anthropic", "deepseek"));
-        MODEL_FALLBACK_CHAINS.put("gpt-4o", List.of("openai", "anthropic", "deepseek"));
-        MODEL_FALLBACK_CHAINS.put("gpt-3.5-turbo", List.of("openai", "deepseek"));
-
-        // Claude models
-        MODEL_FALLBACK_CHAINS.put("claude-3-opus", List.of("anthropic", "openai"));
-        MODEL_FALLBACK_CHAINS.put("claude-3-sonnet", List.of("anthropic", "openai"));
-        MODEL_FALLBACK_CHAINS.put("claude-3-haiku", List.of("anthropic", "deepseek"));
-
-        // DeepSeek models
-        MODEL_FALLBACK_CHAINS.put("deepseek-chat", List.of("deepseek", "openai"));
-        MODEL_FALLBACK_CHAINS.put("deepseek-coder", List.of("deepseek", "openai"));
+    public ModelRouterServiceImpl(ApiKeyPool apiKeyPool, List<ChatAdapter> adapters) {
+        this.apiKeyPool = apiKeyPool;
+        this.adapters = adapters;
     }
+
+    /** Configure the environment fallbacks (used by tests; Spring injects the @Value fields). */
+    public void setEnvFallbacks(boolean openAiEnabled, String openAiKey, String openAiBaseUrl,
+                                boolean anthropicEnabled, String anthropicKey, String anthropicBaseUrl) {
+        this.envOpenAiEnabled = openAiEnabled;
+        this.envOpenAiKey = openAiKey;
+        this.envOpenAiBaseUrl = openAiBaseUrl;
+        this.envAnthropicEnabled = anthropicEnabled;
+        this.envAnthropicKey = anthropicKey;
+        this.envAnthropicBaseUrl = anthropicBaseUrl;
+    }
+
+    // ------------------------------------------------------------------ resolution
+
+    @Override
+    public List<UpstreamProvider> resolveProviders(String model) {
+        Map<String, UpstreamProvider> out = new LinkedHashMap<>();
+
+        for (ApiKeyPool.ProviderConfig c : apiKeyPool.getProvidersForModel(model)) {
+            if (isUsable(c)) {
+                out.putIfAbsent("db:" + c.getId(), toUpstream(c));
+            }
+        }
+
+        String inferred = ProviderTypes.inferFromModel(model);
+        if (inferred != null) {
+            for (ApiKeyPool.ProviderConfig c : apiKeyPool.getEnabledProvidersByType(inferred)) {
+                if (isUsable(c)) {
+                    out.putIfAbsent("db:" + c.getId(), toUpstream(c));
+                }
+            }
+            if (ProviderTypes.OPENAI.equals(inferred) && envOpenAiEnabled && isRealKey(envOpenAiKey)) {
+                out.putIfAbsent("env:openai", new UpstreamProvider(null, "OpenAI (env)", ProviderTypes.OPENAI,
+                    envOpenAiBaseUrl, 120, 1, envOpenAiKey));
+            }
+            if (ProviderTypes.ANTHROPIC.equals(inferred) && envAnthropicEnabled && isRealKey(envAnthropicKey)) {
+                out.putIfAbsent("env:anthropic", new UpstreamProvider(null, "Anthropic (env)", ProviderTypes.ANTHROPIC,
+                    envAnthropicBaseUrl, 120, 1, envAnthropicKey));
+            }
+        }
+        return new ArrayList<>(out.values());
+    }
+
+    private boolean isUsable(ApiKeyPool.ProviderConfig c) {
+        if (!ProviderTypes.isSupported(c.getType())) {
+            return false;
+        }
+        return ProviderTypes.isKeyOptional(c.getType()) || apiKeyPool.hasAvailableKeys(c.getId());
+    }
+
+    private static boolean isRealKey(String key) {
+        return key != null && !key.isBlank() && !key.contains("placeholder") && !key.contains("YOUR");
+    }
+
+    private static UpstreamProvider toUpstream(ApiKeyPool.ProviderConfig c) {
+        return new UpstreamProvider(c.getId(), c.getName(), c.getType(), c.getBaseUrl(),
+            c.getTimeoutSeconds(), Math.max(1, c.getRetryCount()), null);
+    }
+
+    private ChatAdapter adapterFor(String type) {
+        for (ChatAdapter a : adapters) {
+            if (a.supports(type)) {
+                return a;
+            }
+        }
+        throw new UpstreamException(400, "unsupported_provider_type", "Unsupported provider type: " + type, false);
+    }
+
+    /** Number of attempts on one provider: one per available key, bounded by retryCount. */
+    private int attemptsFor(UpstreamProvider p) {
+        if (p.id() == null) {
+            return 1;
+        }
+        int keys = apiKeyPool.getKeyCount(p.id());
+        return Math.max(1, Math.min(p.retryCount(), keys));
+    }
+
+    /** Pick the key for one attempt; returns null if a required key is missing. */
+    private UpstreamTarget acquire(UpstreamProvider p) {
+        if (p.id() == null) {
+            return new UpstreamTarget(p, p.staticApiKey(), null);
+        }
+        ApiKeyPool.KeyEntry key = apiKeyPool.getNextKey(p.id());
+        if (key != null) {
+            return new UpstreamTarget(p, key.getApiKey(), key.getId());
+        }
+        if (ProviderTypes.isKeyOptional(p.type())) {
+            return new UpstreamTarget(p, null, null);
+        }
+        return null;
+    }
+
+    private void onError(UpstreamTarget t, UpstreamException e) {
+        log.warn("Upstream call failed: provider={} type={} status={} retryable={} message={}",
+            t.provider().name(), t.provider().type(), e.getStatus(), e.isRetryable(), e.getMessage());
+        if (t.keyId() != null && e.isRetryable()) {
+            apiKeyPool.recordError(t.keyId(), e.getMessage());
+        }
+    }
+
+    private List<UpstreamProvider> requireProviders(String model) {
+        List<UpstreamProvider> providers = resolveProviders(model);
+        if (providers.isEmpty()) {
+            throw new UpstreamException(404, "model_not_found",
+                "The model '" + model + "' is not configured on any enabled provider", false);
+        }
+        return providers;
+    }
+
+    // ------------------------------------------------------------------ execution
 
     @Override
     public ChatCompletionResponse chatCompletion(ChatCompletionRequest request) {
-        String model = request.getModel();
-
-        // First, try dynamic provider factory (uses database-configured keys)
-        try {
-            if (hasConfiguredKeys(model)) {
-                log.info("Using dynamic provider factory for model: {}", model);
-                return dynamicProviderFactory.chatCompletion(request);
-            }
-        } catch (Exception e) {
-            log.warn("Dynamic provider failed, falling back to static providers: {}", e.getMessage());
-        }
-
-        // Fallback to static provider configuration
-        List<String> providerChain = getProviderChain(model);
-
-        Exception lastException = null;
-        for (String providerName : providerChain) {
-            CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(providerName);
-
-            if (circuitBreaker.getState() == CircuitBreaker.State.OPEN) {
-                log.warn("Circuit breaker open for provider: {}", providerName);
-                continue;
-            }
-
-            try {
-                AiProvider provider = providerRegistry.getProvider(providerName);
-                if (provider == null) {
-                    log.warn("Provider not found: {}", providerName);
-                    continue;
+        UpstreamException last = null;
+        for (UpstreamProvider p : requireProviders(request.getModel())) {
+            ChatAdapter adapter = adapterFor(p.type());
+            for (int attempt = 0; attempt < attemptsFor(p); attempt++) {
+                UpstreamTarget target = acquire(p);
+                if (target == null) {
+                    break;
                 }
-
-                log.info("Routing request to provider: {} for model: {}", providerName, model);
-                ChatCompletionResponse response = circuitBreaker.executeSupplier(
-                    () -> provider.chatCompletion(request)
-                );
-
-                // Add metadata
-                response.setId("chatcmpl-" + UUID.randomUUID().toString().replace("-", "").substring(0, 24));
-                response.setCreated(Instant.now().getEpochSecond());
-                response.setObject("chat.completion");
-
-                return response;
-
-            } catch (Exception e) {
-                log.error("Provider {} failed for model {}: {}", providerName, model, e.getMessage());
-                lastException = e;
+                try {
+                    ChatCompletionResponse response = adapter.complete(target, request);
+                    if (target.keyId() != null) {
+                        long tokens = response.getUsage() != null && response.getUsage().getTotalTokens() != null
+                            ? response.getUsage().getTotalTokens() : 0;
+                        apiKeyPool.recordSuccess(target.keyId(), tokens);
+                    }
+                    return response;
+                } catch (UpstreamException e) {
+                    onError(target, e);
+                    if (!e.isRetryable()) {
+                        throw e;
+                    }
+                    last = e;
+                }
             }
         }
-
-        throw new BusinessException("All providers failed: " +
-            (lastException != null ? lastException.getMessage() : "No providers available"));
-    }
-
-    /**
-     * Check if there are configured API keys for the model's provider
-     */
-    private boolean hasConfiguredKeys(String model) {
-        // Determine provider type from model
-        String providerType = inferProviderFromModel(model);
-        if (providerType == null) {
-            return false;
-        }
-        return apiKeyPool.hasAvailableKeys(providerType);
-    }
-
-    private String inferProviderFromModel(String model) {
-        String lowerModel = model.toLowerCase();
-        if (lowerModel.startsWith("gpt") || lowerModel.contains("openai")) {
-            return "openai";
-        } else if (lowerModel.startsWith("claude") || lowerModel.contains("anthropic")) {
-            return "anthropic";
-        } else if (lowerModel.startsWith("deepseek")) {
-            return "deepseek";
-        } else if (lowerModel.startsWith("moonshot")) {
-            return "moonshot";
-        }
-        return null;
+        throw last != null ? last
+            : new UpstreamException(503, "no_available_provider",
+                "No provider with an available API key for model '" + request.getModel() + "'", false);
     }
 
     @Override
-    public SseEmitter streamChatCompletion(ChatCompletionRequest request) {
-        String model = request.getModel();
-        SseEmitter emitter = new SseEmitter(300000L); // 5 minutes timeout
-
-        // First, try dynamic provider factory (uses database-configured keys)
-        try {
-            if (hasConfiguredKeys(model)) {
-                log.info("Using dynamic provider factory for streaming model: {}", model);
-                dynamicProviderFactory.streamChatCompletion(request, emitter);
-                return emitter;
-            }
-        } catch (Exception e) {
-            log.warn("Dynamic provider failed for streaming, falling back: {}", e.getMessage());
-        }
-
-        // Fallback to static provider configuration
-        List<String> providerChain = getProviderChain(model);
-
-        for (String providerName : providerChain) {
-            CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(providerName);
-
-            if (circuitBreaker.getState() == CircuitBreaker.State.OPEN) {
-                continue;
-            }
-
-            try {
-                AiProvider provider = providerRegistry.getProvider(providerName);
-                if (provider == null) {
-                    continue;
+    public StreamResult streamChatCompletion(ChatCompletionRequest request, StreamSink sink) {
+        AtomicBoolean started = new AtomicBoolean(false);
+        StreamSink tracking = chunk -> {
+            started.set(true);
+            sink.send(chunk);
+        };
+        UpstreamException last = null;
+        for (UpstreamProvider p : requireProviders(request.getModel())) {
+            ChatAdapter adapter = adapterFor(p.type());
+            for (int attempt = 0; attempt < attemptsFor(p); attempt++) {
+                UpstreamTarget target = acquire(p);
+                if (target == null) {
+                    break;
                 }
-
-                log.info("Streaming request to provider: {} for model: {}", providerName, model);
-                provider.streamChatCompletion(request, emitter);
-                return emitter;
-
-            } catch (Exception e) {
-                log.error("Provider {} failed for streaming: {}", providerName, e.getMessage());
+                try {
+                    StreamResult result = adapter.stream(target, request, tracking);
+                    if (target.keyId() != null) {
+                        long tokens = result.getUsage() != null && result.getUsage().getTotalTokens() != null
+                            ? result.getUsage().getTotalTokens() : 0;
+                        apiKeyPool.recordSuccess(target.keyId(), tokens);
+                    }
+                    return result;
+                } catch (UpstreamException e) {
+                    onError(target, e);
+                    if (!e.isRetryable() || started.get()) {
+                        throw e;
+                    }
+                    last = e;
+                }
             }
         }
-
-        emitter.completeWithError(new BusinessException("All providers failed"));
-        return emitter;
+        throw last != null ? last
+            : new UpstreamException(503, "no_available_provider",
+                "No provider with an available API key for model '" + request.getModel() + "'", false);
     }
+
+    // ------------------------------------------------------------------ models
 
     @Override
     public ModelListResponse listModels() {
-        List<ModelListResponse.ModelData> models = new ArrayList<>();
         long created = Instant.now().getEpochSecond();
-        java.util.Set<String> addedModels = new java.util.HashSet<>();
-
-        // First, add models from database configuration (if keys are available)
-        List<ProviderModelPO> dbModels = providerModelMapper.selectList(
-            new LambdaQueryWrapper<ProviderModelPO>()
-                .eq(ProviderModelPO::getEnabled, true)
-        );
-
-        for (ProviderModelPO modelPO : dbModels) {
-            // Only add if provider has available keys
-            String providerType = inferProviderFromModelId(modelPO.getModelId());
-            if (providerType != null && apiKeyPool.hasAvailableKeys(providerType)) {
-                models.add(ModelListResponse.ModelData.builder()
-                    .id(modelPO.getModelId())
-                    .object("model")
-                    .created(created)
-                    .ownedBy(providerType)
-                    .build());
-                addedModels.add(modelPO.getModelId());
+        Map<String, ModelListResponse.ModelData> models = new LinkedHashMap<>();
+        for (ApiKeyPool.ProviderConfig c : apiKeyPool.getEnabledProviders()) {
+            if (!isUsable(c)) {
+                continue;
+            }
+            for (String id : apiKeyPool.getModelsForProvider(c.getId())) {
+                models.putIfAbsent(id, ModelListResponse.ModelData.builder()
+                    .id(id).object("model").created(created).ownedBy(c.getType()).build());
             }
         }
-
-        // Add static fallback chain models
-        for (String model : MODEL_FALLBACK_CHAINS.keySet()) {
-            if (!addedModels.contains(model)) {
-                models.add(ModelListResponse.ModelData.builder()
-                    .id(model)
-                    .object("model")
-                    .created(created)
-                    .ownedBy("ai-panel")
-                    .build());
-                addedModels.add(model);
-            }
-        }
-
-        // Add additional models from registered static providers
-        for (AiProvider provider : providerRegistry.getAllProviders()) {
-            for (String model : provider.getSupportedModels()) {
-                if (!addedModels.contains(model)) {
-                    models.add(ModelListResponse.ModelData.builder()
-                        .id(model)
-                        .object("model")
-                        .created(created)
-                        .ownedBy(provider.getName())
-                        .build());
-                    addedModels.add(model);
-                }
-            }
-        }
-
-        return ModelListResponse.builder()
-            .object("list")
-            .data(models)
-            .build();
-    }
-
-    private String inferProviderFromModelId(String modelId) {
-        String lower = modelId.toLowerCase();
-        if (lower.startsWith("gpt") || lower.contains("o1-")) {
-            return "openai";
-        } else if (lower.startsWith("claude")) {
-            return "anthropic";
-        } else if (lower.startsWith("deepseek")) {
-            return "deepseek";
-        } else if (lower.startsWith("moonshot")) {
-            return "moonshot";
-        }
-        return null;
+        return ModelListResponse.builder().object("list").data(new ArrayList<>(models.values())).build();
     }
 
     @Override
-    public List<String> getProviderModels(String provider) {
-        AiProvider aiProvider = providerRegistry.getProvider(provider);
-        if (aiProvider == null) {
-            throw new BusinessException("Provider not found: " + provider);
+    public List<String> getProviderModels(String providerType) {
+        List<String> out = new ArrayList<>();
+        for (ApiKeyPool.ProviderConfig c : apiKeyPool.getEnabledProvidersByType(providerType)) {
+            for (String id : apiKeyPool.getModelsForProvider(c.getId())) {
+                if (!out.contains(id)) {
+                    out.add(id);
+                }
+            }
         }
-        return aiProvider.getSupportedModels();
+        return out;
     }
 
     @Override
     public boolean isModelSupported(String model) {
-        if (MODEL_FALLBACK_CHAINS.containsKey(model)) {
-            return true;
-        }
-        for (AiProvider provider : providerRegistry.getAllProviders()) {
-            if (provider.getSupportedModels().contains(model)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private List<String> getProviderChain(String model) {
-        List<String> chain = MODEL_FALLBACK_CHAINS.get(model);
-        if (chain != null) {
-            return chain;
-        }
-
-        // Determine provider from model name
-        if (model.startsWith("gpt-")) {
-            return List.of("openai", "deepseek");
-        } else if (model.startsWith("claude-")) {
-            return List.of("anthropic", "openai");
-        } else if (model.startsWith("deepseek-")) {
-            return List.of("deepseek", "openai");
-        } else if (model.startsWith("gemini-")) {
-            return List.of("google", "openai");
-        } else if (model.startsWith("moonshot-")) {
-            return List.of("moonshot", "deepseek");
-        }
-
-        // Default fallback
-        return List.of("openai", "anthropic", "deepseek");
+        return !resolveProviders(model).isEmpty();
     }
 }

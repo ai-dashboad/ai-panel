@@ -48,6 +48,33 @@ export interface CreateProviderRequest {
   timeoutSeconds?: number
   retryCount?: number
   description?: string
+  /** Optional on create; not needed for vllm / ollama / openai_compatible */
+  apiKey?: string
+  /** Optional model ids to register on create, e.g. ["Qwen/Qwen3-32B"] */
+  models?: string[]
+}
+
+export interface ProviderModel {
+  id: number
+  providerId: number
+  modelId: string
+  modelName: string
+  enabled: boolean
+  maxTokens: number | null
+  contextWindow: number | null
+  supportsVision: boolean | null
+  supportsFunctionCall: boolean | null
+  createdAt: string
+}
+
+export interface ProviderModelRequest {
+  modelId: string
+  modelName?: string
+  enabled?: boolean
+  maxTokens?: number
+  contextWindow?: number
+  supportsVision?: boolean
+  supportsFunctionCall?: boolean
 }
 
 export interface CreateProviderApiKeyRequest {

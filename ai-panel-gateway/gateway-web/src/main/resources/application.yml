@@ -35,6 +35,14 @@ spring:
           filters:
             - StripPrefix=0
 
+        # Channel Service admin APIs (upstream providers, models, sales channels; admin JWT)
+        - id: channel-service
+          uri: lb://ai-panel-channel
+          predicates:
+            - Path=/api/v1/providers/**, /api/v1/channels/**
+          filters:
+            - StripPrefix=0
+
         # Billing Service
         - id: billing-service
           uri: lb://billing-service

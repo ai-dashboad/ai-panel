@@ -41,6 +41,7 @@ public class ModelListResponse {
 
         @Schema(description = "Model owner")
         @Builder.Default
+        @com.fasterxml.jackson.annotation.JsonProperty("owned_by")
         private String ownedBy = "ai-panel";
     }
 }

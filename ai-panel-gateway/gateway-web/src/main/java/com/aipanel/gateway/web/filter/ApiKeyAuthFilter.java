@@ -42,6 +42,8 @@ public class ApiKeyAuthFilter implements GlobalFilter, Ordered {
         "/api/v1/billing", // Billing endpoints (use JWT auth)
         "/api/v1/usage",   // Usage endpoints (use JWT auth)
         "/api/v1/admin",   // Admin endpoints (use JWT auth)
+        "/api/v1/providers", // Channel provider management (admin JWT)
+        "/api/v1/channels",  // Channel management (admin JWT)
         "/api/v1/health",
         "/actuator",
         "/swagger-ui",

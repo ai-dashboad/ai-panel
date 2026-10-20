@@ -2,9 +2,17 @@ package com.aipanel.channel.core.service;
 
 import com.aipanel.channel.api.dto.request.ProviderApiKeyRequest;
 import com.aipanel.channel.api.dto.request.ProviderConfigRequest;
+import com.aipanel.channel.api.dto.request.ProviderModelRequest;
 import com.aipanel.channel.api.dto.response.ProviderApiKeyResponse;
 import com.aipanel.channel.api.dto.response.ProviderConfigResponse;
+import com.aipanel.channel.api.dto.response.ProviderModelResponse;
 import com.aipanel.channel.core.pool.ApiKeyPool;
+import com.aipanel.channel.core.upstream.BaseUrls;
+import com.aipanel.channel.core.upstream.ChatAdapter;
+import com.aipanel.channel.core.upstream.ProviderTypes;
+import com.aipanel.channel.core.upstream.UpstreamException;
+import com.aipanel.channel.core.upstream.UpstreamProvider;
+import com.aipanel.channel.core.upstream.UpstreamTarget;
 import com.aipanel.channel.data.mysql.mapper.ProviderApiKeyMapper;
 import com.aipanel.channel.data.mysql.mapper.ProviderConfigMapper;
 import com.aipanel.channel.data.mysql.mapper.ProviderModelMapper;
@@ -33,6 +41,7 @@ public class ProviderConfigService {
     private final ProviderApiKeyMapper providerApiKeyMapper;
     private final ProviderModelMapper providerModelMapper;
     private final ApiKeyPool apiKeyPool;
+    private final List<ChatAdapter> adapters;
 
     // ==================== Provider Config ====================
 
@@ -57,18 +66,37 @@ public class ProviderConfigService {
 
     @Transactional
     public ProviderConfigResponse createProvider(ProviderConfigRequest request) {
-        // Check if type already exists
-        Long count = providerConfigMapper.selectCount(
-            new LambdaQueryWrapper<ProviderConfigPO>()
-                .eq(ProviderConfigPO::getType, request.getType())
-        );
-        if (count > 0) {
-            throw new IllegalArgumentException("Provider type already exists: " + request.getType());
-        }
+        validateProviderConfig(request.getType(), request.getBaseUrl());
 
         ProviderConfigPO po = new ProviderConfigPO();
         BeanUtils.copyProperties(request, po);
+        po.setType(ProviderTypes.normalize(request.getType()));
+        if (po.getBaseUrl() != null) {
+            po.setBaseUrl(po.getBaseUrl().trim());
+        }
         providerConfigMapper.insert(po);
+
+        // Optional key on create (not needed for self-hosted servers)
+        if (request.getApiKey() != null && !request.getApiKey().isBlank()) {
+            ProviderApiKeyRequest keyRequest = new ProviderApiKeyRequest();
+            keyRequest.setProviderId(po.getId());
+            keyRequest.setApiKey(request.getApiKey().trim());
+            keyRequest.setKeyName("Default Key");
+            keyRequest.setEnabled(true);
+            keyRequest.setWeight(100);
+            insertApiKey(keyRequest);
+        }
+
+        // Optional models on create
+        if (request.getModels() != null) {
+            for (String modelId : request.getModels()) {
+                if (modelId != null && !modelId.isBlank()) {
+                    ProviderModelRequest m = new ProviderModelRequest();
+                    m.setModelId(modelId.trim());
+                    upsertModel(po.getId(), m);
+                }
+            }
+        }
 
         // Reload key pool
         apiKeyPool.reload();
@@ -82,8 +110,10 @@ public class ProviderConfigService {
         if (provider == null) {
             throw new IllegalArgumentException("Provider not found: " + id);
         }
-
-        BeanUtils.copyProperties(request, provider);
+        // Partial update: fields the client did not send keep their current value
+        BeanUtils.copyProperties(request, provider, nullPropertyNames(request));
+        provider.setType(ProviderTypes.normalize(provider.getType()));
+        validateProviderConfig(provider.getType(), provider.getBaseUrl());
         providerConfigMapper.updateById(provider);
 
         // Reload key pool
@@ -92,9 +122,45 @@ public class ProviderConfigService {
         return toProviderResponse(provider);
     }
 
+    private static String[] nullPropertyNames(Object source) {
+        org.springframework.beans.BeanWrapper src = new org.springframework.beans.BeanWrapperImpl(source);
+        return java.util.Arrays.stream(src.getPropertyDescriptors())
+            .map(java.beans.PropertyDescriptor::getName)
+            .filter(name -> src.isReadableProperty(name) && src.getPropertyValue(name) == null)
+            .toArray(String[]::new);
+    }
+
+    /**
+     * Reject unsupported types and malformed base URLs. Self-hosted types must have a base URL
+     * (localhost is almost never right inside a container).
+     */
+    static void validateProviderConfig(String type, String baseUrl) {
+        String t = ProviderTypes.normalize(type);
+        if (!ProviderTypes.isSupported(t)) {
+            throw new IllegalArgumentException("Unsupported provider type: " + type);
+        }
+        boolean hasBase = baseUrl != null && !baseUrl.isBlank();
+        if (!hasBase && (ProviderTypes.isKeyOptional(t) || ProviderTypes.defaultBaseUrl(t) == null)) {
+            throw new IllegalArgumentException("Base URL is required for provider type: " + t
+                + " (e.g. http://gpu-host:8000/v1)");
+        }
+        if (hasBase) {
+            try {
+                if (ProviderTypes.isAnthropic(t)) {
+                    BaseUrls.anthropicMessagesUrl(baseUrl);
+                } else {
+                    BaseUrls.openAiRoot(baseUrl, t);
+                }
+            } catch (UpstreamException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+        }
+    }
+
     @Transactional
     public void deleteProvider(Long id) {
         providerConfigMapper.deleteById(id);
+        providerModelMapper.hardDeleteByProviderId(id);
 
         // Also delete associated keys
         providerApiKeyMapper.delete(
@@ -170,6 +236,15 @@ public class ProviderConfigService {
             throw new IllegalArgumentException("Provider not found: " + request.getProviderId());
         }
 
+        ProviderApiKeyPO po = insertApiKey(request);
+
+        // Reload key pool
+        apiKeyPool.reload();
+
+        return toApiKeyResponse(po);
+    }
+
+    private ProviderApiKeyPO insertApiKey(ProviderApiKeyRequest request) {
         ProviderApiKeyPO po = new ProviderApiKeyPO();
         BeanUtils.copyProperties(request, po);
 
@@ -188,11 +263,7 @@ public class ProviderConfigService {
         po.setUsedQuotaToday(0L);
 
         providerApiKeyMapper.insert(po);
-
-        // Reload key pool
-        apiKeyPool.reload();
-
-        return toApiKeyResponse(po);
+        return po;
     }
 
     @Transactional
@@ -267,6 +338,130 @@ public class ProviderConfigService {
         return response;
     }
 
+    // ==================== Models ====================
+
+    public List<ProviderModelResponse> listModels(Long providerId) {
+        requireProvider(providerId);
+        return providerModelMapper.selectList(
+            new LambdaQueryWrapper<ProviderModelPO>()
+                .eq(ProviderModelPO::getProviderId, providerId)
+                .orderByAsc(ProviderModelPO::getModelId)
+        ).stream().map(ProviderConfigService::toModelResponse).collect(Collectors.toList());
+    }
+
+    /**
+     * Add a model to a provider, or update it if the model id already exists.
+     */
+    @Transactional
+    public ProviderModelResponse addModel(Long providerId, ProviderModelRequest request) {
+        requireProvider(providerId);
+        ProviderModelPO po = upsertModel(providerId, request);
+        apiKeyPool.reload();
+        return toModelResponse(po);
+    }
+
+    @Transactional
+    public ProviderModelResponse updateModel(Long providerId, Long modelPk, ProviderModelRequest request) {
+        ProviderModelPO po = providerModelMapper.selectById(modelPk);
+        if (po == null || !po.getProviderId().equals(providerId)) {
+            throw new IllegalArgumentException("Model not found: " + modelPk);
+        }
+        copyModelFields(request, po);
+        providerModelMapper.updateById(po);
+        apiKeyPool.reload();
+        return toModelResponse(po);
+    }
+
+    @Transactional
+    public void deleteModel(Long providerId, Long modelPk) {
+        ProviderModelPO po = providerModelMapper.selectById(modelPk);
+        if (po == null || !po.getProviderId().equals(providerId)) {
+            throw new IllegalArgumentException("Model not found: " + modelPk);
+        }
+        providerModelMapper.hardDeleteById(modelPk);
+        apiKeyPool.reload();
+    }
+
+    /**
+     * Ask the upstream which models it serves (GET {baseUrl}/models). Nothing is saved.
+     */
+    public List<String> discoverModels(Long providerId) {
+        ProviderConfigPO provider = requireProvider(providerId);
+        validateProviderConfig(provider.getType(), provider.getBaseUrl());
+        ApiKeyPool.KeyEntry key = apiKeyPool.getNextKey(providerId);
+        UpstreamProvider up = new UpstreamProvider(provider.getId(), provider.getName(), provider.getType(),
+            provider.getBaseUrl(), provider.getTimeoutSeconds() == null ? 30 : provider.getTimeoutSeconds(), 1, null);
+        UpstreamTarget target = new UpstreamTarget(up, key == null ? null : key.getApiKey(), key == null ? null : key.getId());
+        ChatAdapter adapter = adapters.stream().filter(a -> a.supports(provider.getType())).findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unsupported provider type: " + provider.getType()));
+        try {
+            return adapter.listModels(target);
+        } catch (UpstreamException e) {
+            throw new IllegalStateException("Could not list models from upstream: " + e.getMessage(), e);
+        }
+    }
+
+    private ProviderConfigPO requireProvider(Long providerId) {
+        ProviderConfigPO provider = providerConfigMapper.selectById(providerId);
+        if (provider == null) {
+            throw new IllegalArgumentException("Provider not found: " + providerId);
+        }
+        return provider;
+    }
+
+    private ProviderModelPO upsertModel(Long providerId, ProviderModelRequest request) {
+        String modelId = request.getModelId().trim();
+        ProviderModelPO existing = providerModelMapper.selectOne(
+            new LambdaQueryWrapper<ProviderModelPO>()
+                .eq(ProviderModelPO::getProviderId, providerId)
+                .eq(ProviderModelPO::getModelId, modelId)
+        );
+        ProviderModelPO po = existing != null ? existing : new ProviderModelPO();
+        po.setProviderId(providerId);
+        po.setModelId(modelId);
+        copyModelFields(request, po);
+        if (po.getModelName() == null || po.getModelName().isBlank()) {
+            po.setModelName(modelId);
+        }
+        if (existing != null) {
+            providerModelMapper.updateById(po);
+        } else {
+            providerModelMapper.insert(po);
+        }
+        return po;
+    }
+
+    private static void copyModelFields(ProviderModelRequest r, ProviderModelPO po) {
+        if (r.getModelName() != null) {
+            po.setModelName(r.getModelName());
+        }
+        po.setEnabled(r.getEnabled() == null || r.getEnabled());
+        if (r.getInputPricePerMillion() != null) {
+            po.setInputPricePerMillion(r.getInputPricePerMillion());
+        }
+        if (r.getOutputPricePerMillion() != null) {
+            po.setOutputPricePerMillion(r.getOutputPricePerMillion());
+        }
+        if (r.getMaxTokens() != null) {
+            po.setMaxTokens(r.getMaxTokens());
+        }
+        if (r.getContextWindow() != null) {
+            po.setContextWindow(r.getContextWindow());
+        }
+        if (r.getSupportsVision() != null) {
+            po.setSupportsVision(r.getSupportsVision());
+        }
+        if (r.getSupportsFunctionCall() != null) {
+            po.setSupportsFunctionCall(r.getSupportsFunctionCall());
+        }
+    }
+
+    private static ProviderModelResponse toModelResponse(ProviderModelPO po) {
+        ProviderModelResponse r = new ProviderModelResponse();
+        BeanUtils.copyProperties(po, r);
+        return r;
+    }
+
     // ==================== Quick Setup (傻瓜式配置) ====================
 
     /**
@@ -337,10 +532,11 @@ public class ProviderConfigService {
     @Transactional
     public ProviderConfigResponse quickSetup(String type, String apiKey) {
         // Check if provider already exists
-        ProviderConfigPO existingProvider = providerConfigMapper.selectOne(
+        ProviderConfigPO existingProvider = providerConfigMapper.selectList(
             new LambdaQueryWrapper<ProviderConfigPO>()
                 .eq(ProviderConfigPO::getType, type)
-        );
+                .orderByAsc(ProviderConfigPO::getPriority)
+        ).stream().findFirst().orElse(null);
 
         ProviderConfigPO provider;
         if (existingProvider != null) {
@@ -421,7 +617,7 @@ public class ProviderConfigService {
                 break;
             case "qwen":
                 provider.setName("通义千问");
-                provider.setBaseUrl("https://dashscope.aliyuncs.com/api/v1");
+                provider.setBaseUrl("https://dashscope.aliyuncs.com/compatible-mode/v1");
                 provider.setDescription("Alibaba Qwen models");
                 break;
             case "moonshot":
