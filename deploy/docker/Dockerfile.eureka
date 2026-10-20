@@ -1,0 +1,24 @@
+FROM eclipse-temurin:17-jre
+
+LABEL maintainer="AI Panel Team"
+LABEL description="AI Panel Eureka Service Registry"
+
+WORKDIR /app
+
+# Add non-root user
+RUN groupadd -r aipanel && useradd -r -g aipanel aipanel
+
+# Copy jar
+COPY ai-panel-eureka/target/ai-panel-eureka-*.jar app.jar
+
+# Set permissions
+RUN chown -R aipanel:aipanel /app
+
+USER aipanel
+
+EXPOSE 8761
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD curl -sf http://localhost:8761/actuator/health || exit 1
+
+ENTRYPOINT ["java", "-jar", "-Djava.security.egd=file:/dev/./urandom", "app.jar"]

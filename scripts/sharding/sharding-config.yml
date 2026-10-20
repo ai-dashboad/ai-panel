@@ -1,0 +1,84 @@
+# ShardingSphere JDBC Configuration for AI Panel Billing
+# This configuration enables database sharding for high-write usage records
+
+dataSources:
+  ds_billing_0:
+    dataSourceClassName: com.zaxxer.hikari.HikariDataSource
+    driverClassName: com.mysql.cj.jdbc.Driver
+    jdbcUrl: jdbc:mysql://localhost:3306/ai_panel_billing_0?useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${MYSQL_PASSWORD:root}
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 50
+    minPoolSize: 1
+
+  ds_billing_1:
+    dataSourceClassName: com.zaxxer.hikari.HikariDataSource
+    driverClassName: com.mysql.cj.jdbc.Driver
+    jdbcUrl: jdbc:mysql://localhost:3306/ai_panel_billing_1?useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${MYSQL_PASSWORD:root}
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 50
+    minPoolSize: 1
+
+  ds_billing_2:
+    dataSourceClassName: com.zaxxer.hikari.HikariDataSource
+    driverClassName: com.mysql.cj.jdbc.Driver
+    jdbcUrl: jdbc:mysql://localhost:3306/ai_panel_billing_2?useSSL=false&serverTimezone=Asia/Shanghai
+    username: root
+    password: ${MYSQL_PASSWORD:root}
+    connectionTimeoutMilliseconds: 30000
+    idleTimeoutMilliseconds: 60000
+    maxLifetimeMilliseconds: 1800000
+    maxPoolSize: 50
+    minPoolSize: 1
+
+rules:
+  - !SHARDING
+    tables:
+      t_usage_record:
+        actualDataNodes: ds_billing_${0..2}.t_usage_record
+        databaseStrategy:
+          standard:
+            shardingColumn: user_id
+            shardingAlgorithmName: user_id_mod
+        tableStrategy:
+          none:
+        keyGenerateStrategy:
+          column: id
+          keyGeneratorName: snowflake
+
+      t_daily_usage_summary:
+        actualDataNodes: ds_billing_${0..2}.t_daily_usage_summary
+        databaseStrategy:
+          standard:
+            shardingColumn: user_id
+            shardingAlgorithmName: user_id_mod
+        tableStrategy:
+          none:
+
+    # Broadcast tables (replicated to all shards)
+    broadcastTables:
+      - t_user_balance
+      - t_balance_transaction
+
+    shardingAlgorithms:
+      user_id_mod:
+        type: MOD
+        props:
+          sharding-count: 3
+
+    keyGenerators:
+      snowflake:
+        type: SNOWFLAKE
+        props:
+          worker-id: 1
+
+props:
+  sql-show: true
+  query-with-cipher-column: true

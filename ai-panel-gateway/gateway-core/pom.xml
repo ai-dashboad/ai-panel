@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.aipanel</groupId>
+        <artifactId>ai-panel-gateway</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>gateway-core</artifactId>
+    <name>Gateway Core</name>
+    <description>Gateway core business logic</description>
+
+    <dependencies>
+        <!-- Gateway API -->
+        <dependency>
+            <groupId>com.aipanel</groupId>
+            <artifactId>gateway-api</artifactId>
+        </dependency>
+
+        <!-- Key Service API -->
+        <dependency>
+            <groupId>com.aipanel</groupId>
+            <artifactId>key-api</artifactId>
+        </dependency>
+
+        <!-- WebFlux for reactive -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

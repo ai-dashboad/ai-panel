@@ -1,0 +1,21 @@
+FROM eclipse-temurin:17-jre
+
+LABEL maintainer="AI Panel Team"
+LABEL description="AI Panel API Gateway"
+
+WORKDIR /app
+
+RUN groupadd -r aipanel && useradd -r -g aipanel aipanel
+
+COPY ai-panel-gateway/gateway-web/target/gateway-web-*.jar app.jar
+
+RUN chown -R aipanel:aipanel /app
+
+USER aipanel
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+  CMD curl -sf http://localhost:8080/actuator/health || exit 1
+
+ENTRYPOINT ["java", "-jar", "-Xms256m", "-Xmx512m", "-Djava.security.egd=file:/dev/./urandom", "app.jar"]

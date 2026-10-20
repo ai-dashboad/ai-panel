@@ -1,0 +1,100 @@
+import type { CatalogModel, ModelGroup } from '@/types/model'
+
+/** Offline / empty-API fallback catalog aligned with V005 seed */
+export const FALLBACK_GROUPS: ModelGroup[] = [
+  { code: 'claude-official', name: 'Claude-Official-Main', priceMultiplier: 1.5, modelCount: 8 },
+  { code: 'openai-main', name: 'OpenAI-Main', priceMultiplier: 1.2, modelCount: 7 },
+  { code: 'domestic-agg', name: 'Domestic-Aggregation', priceMultiplier: 0.3, modelCount: 19 },
+  { code: 'gemini-main', name: 'Gemini-Main', priceMultiplier: 1.1, modelCount: 3 },
+  { code: 'welfare', name: 'Welfare-Pool', priceMultiplier: 0.07, modelCount: 5 },
+]
+
+function m(
+  id: string,
+  displayName: string,
+  provider: string,
+  inputPrice: number,
+  outputPrice: number,
+  groupCode: string,
+  ctx = 128000,
+  features: string[] = ['function_calling'],
+): CatalogModel {
+  const group = FALLBACK_GROUPS.find((g) => g.code === groupCode)!
+  const mult = group.priceMultiplier
+  return {
+    id,
+    displayName,
+    provider,
+    modelType: 'CHAT',
+    contextWindow: ctx,
+    maxOutputTokens: 8192,
+    inputPrice,
+    outputPrice,
+    features,
+    groupCode,
+    groupName: group.name,
+    priceMultiplier: mult,
+    sellInputPricePerMillion: +(inputPrice * mult * 1000).toFixed(4),
+    sellOutputPricePerMillion: +(outputPrice * mult * 1000).toFixed(4),
+    labels: ['chat', provider],
+    pricingType: 'usage',
+    description: '',
+  }
+}
+
+export const FALLBACK_MODELS: CatalogModel[] = [
+  m('claude-opus-4', 'Claude Opus 4', 'anthropic', 0.015, 0.075, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-opus-4-1', 'Claude Opus 4.1', 'anthropic', 0.015, 0.075, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-sonnet-4', 'Claude Sonnet 4', 'anthropic', 0.003, 0.015, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-sonnet-4-5', 'Claude Sonnet 4.5', 'anthropic', 0.003, 0.015, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet', 'anthropic', 0.003, 0.015, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-3-5-haiku-20241022', 'Claude 3.5 Haiku', 'anthropic', 0.0008, 0.004, 'claude-official', 200000, ['vision', 'function_calling']),
+  m('claude-3-opus-20240229', 'Claude 3 Opus', 'anthropic', 0.015, 0.075, 'claude-official', 200000, ['vision']),
+  m('claude-3-haiku-20240307', 'Claude 3 Haiku', 'anthropic', 0.00025, 0.00125, 'claude-official', 200000, ['vision']),
+  m('gpt-4o', 'GPT-4o', 'openai', 0.0025, 0.01, 'openai-main', 128000, ['vision', 'function_calling']),
+  m('gpt-4o-mini', 'GPT-4o Mini', 'openai', 0.00015, 0.0006, 'openai-main', 128000, ['vision', 'function_calling']),
+  m('gpt-4-turbo', 'GPT-4 Turbo', 'openai', 0.01, 0.03, 'openai-main'),
+  m('gpt-4.1', 'GPT-4.1', 'openai', 0.002, 0.008, 'openai-main', 1047576),
+  m('o1', 'o1', 'openai', 0.015, 0.06, 'openai-main', 200000, ['reasoning']),
+  m('o1-mini', 'o1 Mini', 'openai', 0.003, 0.012, 'openai-main', 128000, ['reasoning']),
+  m('o3-mini', 'o3 Mini', 'openai', 0.0011, 0.0044, 'openai-main', 200000, ['reasoning']),
+  m('gemini-2.0-flash', 'Gemini 2.0 Flash', 'google', 0.0001, 0.0004, 'gemini-main', 1048576, ['vision', 'function_calling']),
+  m('gemini-1.5-pro', 'Gemini 1.5 Pro', 'google', 0.00125, 0.005, 'gemini-main', 2097152, ['vision', 'function_calling']),
+  m('gemini-1.5-flash', 'Gemini 1.5 Flash', 'google', 0.000075, 0.0003, 'gemini-main', 1048576, ['vision', 'function_calling']),
+  m('deepseek-chat', 'DeepSeek Chat', 'deepseek', 0.00014, 0.00028, 'domestic-agg', 64000),
+  m('deepseek-reasoner', 'DeepSeek Reasoner', 'deepseek', 0.00055, 0.00219, 'domestic-agg', 64000, ['reasoning']),
+  m('deepseek-coder', 'DeepSeek Coder', 'deepseek', 0.00014, 0.00028, 'domestic-agg', 64000),
+  m('moonshot-v1-8k', 'Moonshot v1 8K', 'moonshot', 0.012, 0.012, 'domestic-agg', 8000, []),
+  m('moonshot-v1-32k', 'Moonshot v1 32K', 'moonshot', 0.024, 0.024, 'domestic-agg', 32000, []),
+  m('moonshot-v1-128k', 'Moonshot v1 128K', 'moonshot', 0.06, 0.06, 'domestic-agg', 128000, []),
+  m('kimi-k2.5', 'Kimi K2.5', 'moonshot', 0.002, 0.008, 'domestic-agg', 131072),
+  m('glm-4', 'GLM-4', 'zhipu', 0.001, 0.001, 'domestic-agg', 128000, ['vision', 'function_calling']),
+  m('glm-4-flash', 'GLM-4 Flash', 'zhipu', 0.0001, 0.0001, 'domestic-agg'),
+  m('glm-4-plus', 'GLM-4 Plus', 'zhipu', 0.005, 0.005, 'domestic-agg', 128000, ['vision', 'function_calling']),
+  m('qwen-turbo', 'Qwen Turbo', 'qwen', 0.0003, 0.0006, 'domestic-agg', 131072),
+  m('qwen-plus', 'Qwen Plus', 'qwen', 0.0008, 0.002, 'domestic-agg', 131072),
+  m('qwen-max', 'Qwen Max', 'qwen', 0.002, 0.006, 'domestic-agg', 32768),
+  m('qwen-coder-plus', 'Qwen Coder Plus', 'qwen', 0.0008, 0.002, 'domestic-agg', 131072),
+  m('MiniMax-Text-01', 'MiniMax Text 01', 'minimax', 0.001, 0.001, 'domestic-agg', 1000000),
+  m('abab6.5s-chat', 'ABAB 6.5s', 'minimax', 0.001, 0.001, 'domestic-agg', 245760, []),
+  m('openrouter/auto', 'OpenRouter Auto', 'openrouter', 0.002, 0.008, 'welfare'),
+  m('deepseek-ai/DeepSeek-V3', 'DeepSeek V3 (SiliconFlow)', 'siliconflow', 0.00014, 0.00028, 'domestic-agg', 64000),
+  m('step-2-16k', 'Step-2 16K', 'stepfun', 0.0038, 0.0038, 'domestic-agg', 16000, []),
+  m('doubao-pro-32k', 'Doubao Pro 32K', 'doubao', 0.0008, 0.002, 'domestic-agg', 32000),
+]
+
+export const PROVIDER_META: Record<string, { name: string; color: string }> = {
+  openai: { name: 'OpenAI', color: '#10a37f' },
+  anthropic: { name: 'Anthropic', color: '#d97757' },
+  google: { name: 'Google', color: '#4285f4' },
+  deepseek: { name: 'DeepSeek', color: '#4f46e5' },
+  moonshot: { name: 'Moonshot', color: '#f59e0b' },
+  zhipu: { name: 'Zhipu', color: '#ef4444' },
+  qwen: { name: 'Qwen', color: '#6366f1' },
+  minimax: { name: 'MiniMax', color: '#ec4899' },
+  openrouter: { name: 'OpenRouter', color: '#0ea5e9' },
+  siliconflow: { name: 'SiliconFlow', color: '#14b8a6' },
+  stepfun: { name: 'StepFun', color: '#8b5cf6' },
+  doubao: { name: 'Doubao', color: '#3b82f6' },
+  azure: { name: 'Azure', color: '#0078d4' },
+}

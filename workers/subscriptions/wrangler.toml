@@ -1,0 +1,24 @@
+name = "ai-panel-subscriptions"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-panel-subscriptions"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+# Comma-separated usernames (matching the "username" claim in ai-panel-user's JWT)
+# allowed to review subscription requests. There is no role/admin concept in
+# ai-panel-user yet, so this is a deliberately simple allowlist rather than full RBAC.
+ADMIN_USERNAMES = "admin"
+
+[observability]
+enabled = true
+
+# Set the real secret with:
+#   npx wrangler secret put JWT_SECRET
+# It must match the `jwt.secret` value configured for ai-panel-user
+# (see ai-panel-user/user-web/src/main/resources/application.yml).

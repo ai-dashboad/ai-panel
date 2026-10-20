@@ -1,0 +1,22 @@
+name = "ai-panel-model"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-panel-model"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+# Comma-separated usernames (matching the "username" claim in ai-panel-user's JWT)
+# allowed to create/update/delete models. Everyone else gets read-only access.
+ADMIN_USERNAMES = "admin"
+
+[observability]
+enabled = true
+
+# Set the real secret with:
+#   npx wrangler secret put JWT_SECRET
+# It must match the `jwt.secret` value configured for ai-panel-user.

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.aipanel</groupId>
+        <artifactId>ai-panel</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>ai-panel-dispatch</artifactId>
+    <packaging>pom</packaging>
+    <name>AI Panel Dispatch Service</name>
+    <description>Core model dispatch and routing service</description>
+
+    <modules>
+        <module>dispatch-api</module>
+        <module>dispatch-core</module>
+        <module>dispatch-data</module>
+        <module>dispatch-web</module>
+    </modules>
+</project>

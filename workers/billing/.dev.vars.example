@@ -1,0 +1,5 @@
+# Local-only secrets for `wrangler dev`. Copy to .dev.vars (git-ignored).
+# JWT_SECRET must match ai-panel-user's jwt.secret.
+JWT_SECRET=change_me_to_a_long_random_string
+# Shared secret for service-to-service calls (X-Internal-Token header).
+INTERNAL_API_TOKEN=change_me

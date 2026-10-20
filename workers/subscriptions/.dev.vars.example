@@ -1,0 +1,3 @@
+# Local-only secrets for `wrangler dev`. Copy to .dev.vars (git-ignored).
+# Must match JWT_SECRET used by ai-panel-user.
+JWT_SECRET=change_me_to_a_long_random_string

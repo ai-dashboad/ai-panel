@@ -1,0 +1,239 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: ai-panel-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_DATABASE: ai_panel_user
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/sql:/docker-entrypoint-initdb.d:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ai-panel-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Eureka Service Registry
+  eureka:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.eureka
+    container_name: ai-panel-eureka
+    ports:
+      - "8761:8761"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_USER: ${EUREKA_USER:-admin}
+      EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # API Gateway
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.gateway
+    container_name: ai-panel-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (>= 32 random bytes)}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # User Service
+  user-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.user
+    container_name: ai-panel-user
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (>= 32 random bytes)}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  # Key Service
+  key-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.key
+    container_name: ai-panel-key
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  # Dispatch Service
+  dispatch-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.dispatch
+    container_name: ai-panel-dispatch
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  # Billing Service
+  billing-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.billing
+    container_name: ai-panel-billing
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  # Channel Service (OpenAI Compatible API)
+  channel-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.channel
+    container_name: ai-panel-channel
+    ports:
+      - "8086:8086"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8086
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Analytics Service (Usage & Metrics)
+  analytics-service:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.analytics
+    container_name: ai-panel-analytics
+    ports:
+      - "8087:8087"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8087
+      EUREKA_URL: http://${EUREKA_USER:-admin}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env}@eureka:8761/eureka/
+      REDIS_HOST: redis
+      MYSQL_HOST: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+    depends_on:
+      eureka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
+  ui:
+    build:
+      context: ./ai-panel-ui
+      dockerfile: ../deploy/docker/Dockerfile.ui
+    container_name: ai-panel-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  default:
+    name: ai-panel-network

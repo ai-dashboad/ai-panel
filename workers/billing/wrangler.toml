@@ -1,0 +1,25 @@
+name = "ai-panel-billing"
+main = "src/index.ts"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-panel-billing"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[vars]
+# Uniform starting monthly quota (in tokens) applied to every employee.
+# There's no per-user override yet — everyone shares this same default.
+DEFAULT_MONTHLY_QUOTA_TOKENS = "1000000"
+# Comma-separated usernames (JWT "username" claim) allowed to view any user's
+# usage and to add credits.
+ADMIN_USERNAMES = "admin"
+
+[observability]
+enabled = true
+
+# Set the real secrets with:
+#   npx wrangler secret put JWT_SECRET          # must match ai-panel-user's jwt.secret
+#   npx wrangler secret put INTERNAL_API_TOKEN  # must match INTERNAL_API_TOKEN given to ai-panel-dispatch
