@@ -4,7 +4,7 @@
 
 [English](#overview) · [中文简介](#中文简介) · [License](#license)
 
-<!-- Badges: add once the repo is public, e.g. build status, license, release -->
+[![License: MIT](https://img.shields.io/badge/license-MIT-A78BFA?style=flat-square)](LICENSE) [![Release](https://img.shields.io/github/v/release/ai-dashboad/ai-panel?style=flat-square&color=EC4899)](https://github.com/ai-dashboad/ai-panel/releases) ![Java 17](https://img.shields.io/badge/Java-17-ED8B00?style=flat-square&logo=openjdk&logoColor=white) ![Spring AI](https://img.shields.io/badge/Spring_AI-6DB33F?style=flat-square&logo=spring&logoColor=white) ![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white) ![OpenAI-compatible](https://img.shields.io/badge/API-OpenAI--compatible-7C3AED?style=flat-square)
 
 ---
 
