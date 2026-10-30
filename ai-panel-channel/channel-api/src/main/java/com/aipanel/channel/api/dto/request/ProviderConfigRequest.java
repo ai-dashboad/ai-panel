@@ -50,4 +50,15 @@ public class ProviderConfigRequest {
      * Description of this provider
      */
     private String description;
+
+    /**
+     * Optional API key, only used on create (self-hosted types such as vllm / ollama /
+     * openai_compatible do not need one). Use the /keys endpoints to manage keys later.
+     */
+    private String apiKey;
+
+    /**
+     * Optional model ids to register on create, e.g. ["Qwen/Qwen3-32B"].
+     */
+    private java.util.List<String> models;
 }

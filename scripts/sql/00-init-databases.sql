@@ -6,6 +6,7 @@ CREATE DATABASE IF NOT EXISTS ai_panel_user DEFAULT CHARACTER SET utf8mb4 COLLAT
 CREATE DATABASE IF NOT EXISTS ai_panel_key DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS ai_panel_dispatch DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS ai_panel_model DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS ai_panel_channel DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS ai_panel_billing DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- Create sharded databases for usage records

@@ -177,9 +177,14 @@ services:
       REDIS_HOST: redis
       MYSQL_HOST: mysql
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      # Verifies admin JWTs for /api/v1/providers and /api/v1/channels (same secret as user-service/gateway)
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (>= 32 random bytes)}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # Self-hosted vLLM / Ollama on the Docker host are reachable as http://host.docker.internal:<port>/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       eureka:
         condition: service_healthy
